@@ -90,6 +90,7 @@ export function createApp(deps: AppDependencies): Express {
   const authMiddleware = createAuthMiddleware(authService);
 
   // --- Global Middleware (order matters) ---
+  app.set('trust proxy', 1); // Trust first proxy (Heroku)
   app.use(correlationIdMiddleware);
   app.use(createCorsMiddleware());
   app.use(generalLimiter);
