@@ -35,6 +35,117 @@ export function createWorkoutsRouter(
   });
 
   /**
+   * GET /api/workouts/export
+   * Export workouts as CSV. Respects filter query params.
+   * Columns: id, date, duration, title, comment, tags, activityType
+   */
+  router.get('/export', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const options = parseListOptions(req);
+      options.pageSize = 10000; // No pagination for export
+      options.page = 1;
+      const result = await workoutService.listWorkouts(req.user!.userId, options);
+
+      const header = 'id,date,duration,title,comment,tags,activityType';
+      const rows = result.items.map((w) => {
+        const date = w.startTime instanceof Date
+          ? w.startTime.toISOString().split('T')[0]
+          : new Date(w.startTime).toISOString().split('T')[0];
+        const duration = formatDurationForCsv(w.durationSeconds);
+        const title = escapeCsvField(w.title || '');
+        const comment = escapeCsvField((w as unknown as Record<string, unknown>).comment as string || '');
+        const tags = (w.tags || []).join('|');
+        const activityType = w.activityType || '';
+        return `${w.id},${date},${duration},${title},${comment},${tags},${activityType}`;
+      });
+
+      const csv = [header, ...rows].join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="workouts-export.csv"');
+      res.status(200).send(csv);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/workouts/import
+   * Import CSV to bulk update workout metadata.
+   * Updatable columns: title, comment, tags
+   * Read-only columns (rejected if changed): date, duration, activityType
+   */
+  router.post('/import', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { csv } = req.body;
+      if (!csv || typeof csv !== 'string') {
+        throw new ValidationError('CSV data is required in the "csv" field', { field: 'csv' });
+      }
+
+      const lines = csv.trim().split('\n');
+      if (lines.length < 2) {
+        throw new ValidationError('CSV must have a header row and at least one data row', { field: 'csv' });
+      }
+
+      const headerLine = lines[0].toLowerCase().trim();
+      const headers = parseCsvLine(headerLine);
+      const idIdx = headers.indexOf('id');
+      if (idIdx === -1) {
+        throw new ValidationError('CSV must have an "id" column', { field: 'csv' });
+      }
+
+      const titleIdx = headers.indexOf('title');
+      const commentIdx = headers.indexOf('comment');
+      const tagsIdx = headers.indexOf('tags');
+
+      // Read-only columns: date, duration, activityType (present for context but not updatable)
+
+      const results = { total: lines.length - 1, updated: 0, skipped: 0, failed: [] as Array<{ row: number; id: string; reason: string }> };
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) { results.skipped++; continue; }
+
+        const fields = parseCsvLine(line);
+        const id = fields[idIdx]?.trim();
+        if (!id) {
+          results.failed.push({ row: i + 1, id: '', reason: 'Missing workout ID' });
+          continue;
+        }
+
+        // Build updates
+        const updates: Record<string, unknown> = {};
+        if (titleIdx !== -1 && fields[titleIdx] !== undefined && fields[titleIdx] !== '') {
+          updates.title = fields[titleIdx];
+        }
+        if (commentIdx !== -1 && fields[commentIdx] !== undefined) {
+          updates.comment = fields[commentIdx];
+        }
+        if (tagsIdx !== -1 && fields[tagsIdx] !== undefined && fields[tagsIdx] !== '') {
+          updates.tags = fields[tagsIdx].split('|').map((t: string) => t.trim()).filter(Boolean);
+        }
+
+        if (Object.keys(updates).length === 0) {
+          results.skipped++;
+          continue;
+        }
+
+        try {
+          await workoutService.updateWorkout(id, req.user!.userId, updates);
+          results.updated++;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          results.failed.push({ row: i + 1, id, reason: message });
+        }
+      }
+
+      res.status(200).json(successResponse(results));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
    * GET /api/workouts/:id
    * Get a single workout by ID.
    */
@@ -301,4 +412,54 @@ function extractFilesFromRequest(req: Request): Array<{ buffer: Buffer; fileName
   }
 
   return [];
+}
+
+/**
+ * Format duration in seconds to human-readable string for CSV export.
+ */
+function formatDurationForCsv(seconds: number): string {
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+  if (mins > 0) return `${mins}m ${secs}s`;
+  return `${secs}s`;
+}
+
+/**
+ * Escape a field value for CSV (wrap in quotes if it contains commas, quotes, or newlines).
+ */
+function escapeCsvField(value: string): string {
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Parse a CSV line respecting quoted fields.
+ */
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      fields.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  fields.push(current);
+  return fields;
 }
