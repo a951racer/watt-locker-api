@@ -196,7 +196,7 @@ export function createWorkoutsRouter(
 
   /**
    * POST /api/workouts/upload
-   * Upload a single workout file.
+   * Upload a single workout file or archive (.zip, .gz).
    * Expects multipart/form-data with a 'file' field, or raw body with filename header.
    */
   router.post('/upload', async (req: Request, res: Response, next: NextFunction) => {
@@ -204,11 +204,16 @@ export function createWorkoutsRouter(
       const { buffer, fileName } = extractFileFromRequest(req);
       const dataSource = req.body?.dataSource ?? 'manual';
 
-      const result = await uploadService.uploadSingle(buffer, fileName, req.user!.userId, {
+      const result = await uploadService.uploadFile(buffer, fileName, req.user!.userId, {
         dataSource,
       });
 
-      res.status(201).json(successResponse(result));
+      // If single file (not archive), return the first result directly for backward compat
+      if (result.total === 1 && result.successful.length === 1) {
+        res.status(201).json(successResponse(result.successful[0]));
+      } else {
+        res.status(200).json(successResponse(result));
+      }
     } catch (err) {
       next(err);
     }
@@ -267,8 +272,8 @@ function parseListOptions(req: Request): ListWorkoutsOptions {
 
   if (req.query.pageSize) {
     const pageSize = parseInt(req.query.pageSize as string, 10);
-    if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) {
-      throw new ValidationError('pageSize must be between 1 and 100', { field: 'pageSize' });
+    if (isNaN(pageSize) || pageSize < 1 || pageSize > 1000) {
+      throw new ValidationError('pageSize must be between 1 and 1000', { field: 'pageSize' });
     }
     options.pageSize = pageSize;
   }
