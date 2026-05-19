@@ -63,6 +63,7 @@ export interface WorkoutDocument {
   driveWebViewLink?: string;
   title?: string;
   description?: string;
+  comment?: string;
   tags?: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -168,6 +169,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     if (workout.driveWebViewLink !== undefined) doc.driveWebViewLink = workout.driveWebViewLink;
     if (workout.title !== undefined) doc.title = workout.title;
     if (workout.description !== undefined) doc.description = workout.description;
+    if (workout.comment !== undefined) doc.comment = workout.comment;
     if (workout.tags !== undefined) doc.tags = workout.tags;
 
     const result = await this.workouts.insertOne(doc as Omit<WorkoutDocument, '_id'>);
@@ -241,6 +243,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
 
     if (updates.title !== undefined) $set.title = updates.title;
     if (updates.description !== undefined) $set.description = updates.description;
+    if (updates.comment !== undefined) $set.comment = updates.comment;
     if (updates.tags !== undefined) $set.tags = updates.tags;
     if (updates.activityType !== undefined) $set.activityType = updates.activityType;
 
@@ -389,6 +392,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
       driveWebViewLink: doc.driveWebViewLink,
       title: doc.title,
       description: doc.description,
+      comment: doc.comment,
       tags: doc.tags,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,

@@ -72,6 +72,7 @@ export interface WorkoutRecord {
   // Metadata
   title?: string;
   description?: string;
+  comment?: string;
   tags?: string[];
 
   createdAt: Date;
@@ -81,7 +82,7 @@ export interface WorkoutRecord {
 /** Updatable metadata fields on a WorkoutRecord */
 export type WorkoutMetadata = Pick<
   WorkoutRecord,
-  'title' | 'description' | 'tags' | 'activityType'
+  'title' | 'description' | 'comment' | 'tags' | 'activityType'
 >;
 
 /** A single time-series data point within a workout */

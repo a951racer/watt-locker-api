@@ -230,6 +230,12 @@ function validateWorkoutUpdate(body: unknown): void {
     }
   }
 
+  if ('comment' in payload && payload.comment !== undefined) {
+    if (typeof payload.comment !== 'string') {
+      throw new ValidationError('comment must be a string', { field: 'comment' });
+    }
+  }
+
   if ('tags' in payload && payload.tags !== undefined) {
     if (!Array.isArray(payload.tags)) {
       throw new ValidationError('tags must be an array of strings', { field: 'tags' });
