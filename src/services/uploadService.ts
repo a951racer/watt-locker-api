@@ -12,6 +12,7 @@ import { ISettingsService } from './settingsService';
 import { ValidationError, ConflictError } from '../utils/errors';
 import { WorkoutRecord } from '../models/workout';
 import { config } from '../config/env';
+import { extractArchive, shouldExtractArchive } from '../utils/archiveExtractor';
 
 /** Options for single file upload */
 export interface UploadOptions {
@@ -32,6 +33,12 @@ export interface BulkUploadOptions {
 
 /** Upload service interface */
 export interface IUploadService {
+  uploadFile(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<BulkUploadResult>;
   uploadSingle(
     file: Buffer,
     fileName: string,
@@ -111,6 +118,50 @@ export class UploadService implements IUploadService {
         error: err instanceof Error ? err.message : String(err),
       });
       return null;
+    }
+  }
+
+  /**
+   * Upload a file that may be an archive or a single workout file.
+   * If it's an archive (.zip, .gz), extracts workout files and processes each.
+   * If it's a single workout file, processes it directly.
+   * Returns a BulkUploadResult for archives, or wraps single result.
+   */
+  async uploadFile(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<BulkUploadResult> {
+    if (shouldExtractArchive(fileName)) {
+      const extractedFiles = extractArchive(file, fileName);
+      this.logger.info('Archive extracted', {
+        fileName,
+        filesFound: extractedFiles.length,
+      });
+
+      if (extractedFiles.length === 0) {
+        return { total: 0, successful: [], failed: [{ fileName, error: 'No workout files found in archive', errorCode: 'NO_WORKOUT_FILES' }], inProgress: 0 };
+      }
+
+      return this.uploadBulk(
+        extractedFiles.map((f) => ({ buffer: f.buffer, fileName: f.fileName })),
+        userId,
+        { dataSource: options?.dataSource },
+      );
+    }
+
+    // Single file — wrap in bulk result
+    try {
+      const result = await this.uploadSingle(file, fileName, userId, options);
+      return { total: 1, successful: [result], failed: [], inProgress: 0 };
+    } catch (error) {
+      return {
+        total: 1,
+        successful: [],
+        failed: [{ fileName, error: error instanceof Error ? error.message : String(error), errorCode: this.getErrorCode(error) }],
+        inProgress: 0,
+      };
     }
   }
 
@@ -232,7 +283,22 @@ export class UploadService implements IUploadService {
     const successful: UploadResult[] = [];
     const failed: FailedUpload[] = [];
 
+    // Expand any archives in the file list
+    const expandedFiles: FileInput[] = [];
     for (const fileInput of files) {
+      if (shouldExtractArchive(fileInput.fileName)) {
+        const extracted = extractArchive(fileInput.buffer, fileInput.fileName);
+        this.logger.info('Archive extracted in bulk', {
+          fileName: fileInput.fileName,
+          filesFound: extracted.length,
+        });
+        expandedFiles.push(...extracted.map((f) => ({ buffer: f.buffer, fileName: f.fileName })));
+      } else {
+        expandedFiles.push(fileInput);
+      }
+    }
+
+    for (const fileInput of expandedFiles) {
       try {
         const result = await this.uploadSingle(fileInput.buffer, fileInput.fileName, userId, {
           dataSource: options?.dataSource,
@@ -248,7 +314,7 @@ export class UploadService implements IUploadService {
     }
 
     return {
-      total: files.length,
+      total: expandedFiles.length,
       successful,
       failed,
       inProgress: 0,
@@ -281,8 +347,30 @@ export class UploadService implements IUploadService {
     for (const fileRef of inboxFiles) {
       try {
         const fileBuffer = await adapter.retrieve(fileRef);
-        const result = await this.uploadSingle(fileBuffer, fileRef.fileName, userId);
-        successful.push(result);
+
+        if (shouldExtractArchive(fileRef.fileName)) {
+          // Archive file — extract and process each workout
+          const extracted = extractArchive(fileBuffer, fileRef.fileName);
+          this.logger.info('Inbox archive extracted', {
+            fileName: fileRef.fileName,
+            filesFound: extracted.length,
+          });
+          for (const extractedFile of extracted) {
+            try {
+              const result = await this.uploadSingle(extractedFile.buffer, extractedFile.fileName, userId);
+              successful.push(result);
+            } catch (error) {
+              failed.push({
+                fileName: extractedFile.fileName,
+                error: error instanceof Error ? error.message : String(error),
+                errorCode: this.getErrorCode(error),
+              });
+            }
+          }
+        } else {
+          const result = await this.uploadSingle(fileBuffer, fileRef.fileName, userId);
+          successful.push(result);
+        }
 
         // Remove successfully processed file from inbox
         await adapter.removeFromFolder(fileRef);
