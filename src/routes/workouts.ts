@@ -35,6 +35,85 @@ export function createWorkoutsRouter(
   });
 
   /**
+   * GET /api/workouts/performance-metrics
+   * Compute and return CTL (Fitness), ATL (Fatigue), and TSB (Form) over time.
+   * Query params: days (number of days to return, default 90)
+   */
+  router.get('/performance-metrics', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const days = req.query.days ? parseInt(req.query.days as string, 10) : 90;
+      if (isNaN(days) || days < 1 || days > 365) {
+        throw new ValidationError('days must be between 1 and 365', { field: 'days' });
+      }
+
+      // Fetch all workouts for the user (need full history for accurate CTL)
+      const allWorkouts = await workoutService.listWorkouts(req.user!.userId, {
+        page: 1,
+        pageSize: 10000,
+        sortBy: 'date',
+        sortOrder: 'asc',
+      });
+
+      // Aggregate daily TSS
+      const dailyTSS: Map<string, number> = new Map();
+      for (const w of allWorkouts.items) {
+        const date = (w.startTime instanceof Date ? w.startTime : new Date(w.startTime))
+          .toISOString().split('T')[0];
+        const tss = (w as unknown as Record<string, unknown>).tss as number | undefined;
+        if (tss != null) {
+          dailyTSS.set(date, (dailyTSS.get(date) || 0) + tss);
+        }
+      }
+
+      // Determine date range
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Find earliest workout date to start computation
+      let startDate: Date;
+      if (allWorkouts.items.length > 0) {
+        const first = allWorkouts.items[0].startTime;
+        startDate = new Date(first instanceof Date ? first : new Date(first));
+        startDate.setHours(0, 0, 0, 0);
+      } else {
+        startDate = new Date(today);
+        startDate.setDate(startDate.getDate() - days);
+      }
+
+      // Compute CTL/ATL/TSB from start through today
+      let ctl = 0;
+      let atl = 0;
+      const results: Array<{ date: string; ctl: number; atl: number; tsb: number }> = [];
+
+      const current = new Date(startDate);
+      while (current <= today) {
+        const dateStr = current.toISOString().split('T')[0];
+        const tss = dailyTSS.get(dateStr) || 0;
+
+        ctl = ctl + (tss - ctl) / 42;
+        atl = atl + (tss - atl) / 7;
+        const tsb = ctl - atl;
+
+        results.push({
+          date: dateStr,
+          ctl: Math.round(ctl * 10) / 10,
+          atl: Math.round(atl * 10) / 10,
+          tsb: Math.round(tsb * 10) / 10,
+        });
+
+        current.setDate(current.getDate() + 1);
+      }
+
+      // Return only the last N days
+      const output = results.slice(-days);
+
+      res.status(200).json(successResponse(output));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
    * GET /api/workouts/export
    * Export workouts as CSV. Respects filter query params.
    * Columns: id, date, duration, title, comment, tags, activityType
