@@ -7,6 +7,7 @@ export interface SettingsDocument {
   driveStoragePath: string;
   driveInboxPath: string;
   connectedSources: UserSettings['connectedSources'];
+  ftpHistory?: Array<{ effectiveDate: Date; ftpWatts: number }>;
   updatedAt: Date;
 }
 
@@ -45,6 +46,7 @@ export class MongoSettingsRepository implements ISettingsRepository {
       driveStoragePath: doc.driveStoragePath,
       driveInboxPath: doc.driveInboxPath,
       connectedSources: doc.connectedSources,
+      ftpHistory: doc.ftpHistory,
       updatedAt: doc.updatedAt,
     };
   }
@@ -65,6 +67,9 @@ export class MongoSettingsRepository implements ISettingsRepository {
     }
     if (settings.connectedSources !== undefined) {
       $set.connectedSources = settings.connectedSources;
+    }
+    if (settings.ftpHistory !== undefined) {
+      $set.ftpHistory = settings.ftpHistory;
     }
 
     // $setOnInsert only includes fields NOT already in $set to avoid conflicts
@@ -91,6 +96,7 @@ export class MongoSettingsRepository implements ISettingsRepository {
       driveStoragePath: doc.driveStoragePath,
       driveInboxPath: doc.driveInboxPath,
       connectedSources: doc.connectedSources,
+      ftpHistory: doc.ftpHistory,
       updatedAt: doc.updatedAt,
     };
   }

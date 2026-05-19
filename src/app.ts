@@ -116,7 +116,7 @@ export function createApp(deps: AppDependencies): Express {
   app.use('/api/settings', createSettingsRouter(settingsService, authMiddleware));
 
   // Workout routes — JWT auth applied inside the router
-  app.use('/api/workouts', createWorkoutsRouter(workoutService, uploadService, authMiddleware));
+  app.use('/api/workouts', createWorkoutsRouter(workoutService, uploadService, authMiddleware, settingsService, workoutRepository));
 
   // --- Error Handler (must be last) ---
   app.use(errorHandler);

@@ -23,5 +23,8 @@ export interface UserSettings {
   // Connected data sources
   connectedSources: ConnectedSource[];
 
+  // FTP history for TSS computation
+  ftpHistory?: Array<{ effectiveDate: Date; ftpWatts: number }>;
+
   updatedAt: Date;
 }

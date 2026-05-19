@@ -44,6 +44,7 @@ export interface WorkoutDocument {
   normalizedPowerWatts?: number;
   totalWorkKj?: number;
   ftpWatts?: number;
+  ftpUsed?: number;
   intensityFactor?: number;
   tss?: number;
   aerobicDecoupling?: number;
@@ -94,6 +95,10 @@ export interface IWorkoutRepository {
   findById(id: string): Promise<WorkoutRecord | null>;
   findMany(query: WorkoutQuery): Promise<PaginatedResult<WorkoutRecord>>;
   update(id: string, updates: Partial<WorkoutMetadata>): Promise<WorkoutRecord>;
+  updatePowerMetrics(
+    id: string,
+    metrics: { tss?: number; intensityFactor?: number; ftpUsed?: number },
+  ): Promise<WorkoutRecord>;
   delete(id: string): Promise<void>;
   findDuplicate(userId: string, startTime: Date, durationSeconds: number): Promise<WorkoutRecord | null>;
   findBySourceActivityId(userId: string, sourceActivityId: string): Promise<WorkoutRecord | null>;
@@ -147,6 +152,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     if (workout.normalizedPowerWatts !== undefined) doc.normalizedPowerWatts = workout.normalizedPowerWatts;
     if (workout.totalWorkKj !== undefined) doc.totalWorkKj = workout.totalWorkKj;
     if (workout.ftpWatts !== undefined) doc.ftpWatts = workout.ftpWatts;
+    if (workout.ftpUsed !== undefined) doc.ftpUsed = workout.ftpUsed;
     if (workout.intensityFactor !== undefined) doc.intensityFactor = workout.intensityFactor;
     if (workout.tss !== undefined) doc.tss = workout.tss;
     if (workout.aerobicDecoupling !== undefined) doc.aerobicDecoupling = workout.aerobicDecoupling;
@@ -246,6 +252,33 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     if (updates.comment !== undefined) $set.comment = updates.comment;
     if (updates.tags !== undefined) $set.tags = updates.tags;
     if (updates.activityType !== undefined) $set.activityType = updates.activityType;
+
+    const result = await this.workouts.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set },
+      { returnDocument: 'after' },
+    );
+
+    if (!result) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    return this.toWorkoutRecord(result as unknown as WorkoutDocument);
+  }
+
+  async updatePowerMetrics(
+    id: string,
+    metrics: { tss?: number; intensityFactor?: number; ftpUsed?: number },
+  ): Promise<WorkoutRecord> {
+    if (!ObjectId.isValid(id)) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    const $set: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (metrics.tss !== undefined) $set.tss = metrics.tss;
+    if (metrics.intensityFactor !== undefined) $set.intensityFactor = metrics.intensityFactor;
+    if (metrics.ftpUsed !== undefined) $set.ftpUsed = metrics.ftpUsed;
 
     const result = await this.workouts.findOneAndUpdate(
       { _id: new ObjectId(id) },
@@ -373,6 +406,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
       normalizedPowerWatts: doc.normalizedPowerWatts,
       totalWorkKj: doc.totalWorkKj,
       ftpWatts: doc.ftpWatts,
+      ftpUsed: doc.ftpUsed,
       intensityFactor: doc.intensityFactor,
       tss: doc.tss,
       aerobicDecoupling: doc.aerobicDecoupling,
