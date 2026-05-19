@@ -1,8 +1,11 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { IWorkoutService, ListWorkoutsOptions } from '../services/workoutService';
 import { IUploadService } from '../services/uploadService';
+import { ISettingsService } from '../services/settingsService';
+import { IWorkoutRepository } from '../repositories/workoutRepository';
 import { ValidationError } from '../utils/errors';
 import { successResponse } from '../utils/response';
+import { lookupFtp } from '../utils/ftpLookup';
 
 /**
  * Creates the workouts router with injected dependencies.
@@ -12,6 +15,8 @@ export function createWorkoutsRouter(
   workoutService: IWorkoutService,
   uploadService: IUploadService,
   authMiddleware: RequestHandler,
+  settingsService?: ISettingsService,
+  workoutRepository?: IWorkoutRepository,
 ): Router {
   const router = Router();
 
@@ -108,6 +113,64 @@ export function createWorkoutsRouter(
       const output = results.slice(-days);
 
       res.status(200).json(successResponse(output));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/workouts/recalculate
+   * Recalculate TSS, IF, and ftpUsed for all workouts using the user's FTP history.
+   */
+  router.post('/recalculate', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!settingsService || !workoutRepository) {
+        throw new ValidationError('Recalculate endpoint is not configured');
+      }
+
+      const userId = req.user!.userId;
+      const settings = await settingsService.getSettings(userId);
+
+      // Fetch all workouts for the user
+      const allWorkouts = await workoutService.listWorkouts(userId, {
+        page: 1,
+        pageSize: 10000,
+        sortBy: 'date',
+        sortOrder: 'asc',
+      });
+
+      let updated = 0;
+      let failed = 0;
+
+      for (const workout of allWorkouts.items) {
+        if (!workout.normalizedPowerWatts) continue;
+
+        try {
+          const workoutDate = workout.startTime instanceof Date
+            ? workout.startTime
+            : new Date(workout.startTime);
+
+          const ftp = lookupFtp(workoutDate, settings.ftpHistory, workout.ftpWatts);
+          const np = workout.normalizedPowerWatts;
+          const duration = workout.movingTimeSeconds ?? workout.durationSeconds;
+
+          const tss = Math.round(
+            ((duration * Math.pow(np, 2)) / (Math.pow(ftp, 2) * 3600)) * 100 * 10,
+          ) / 10;
+          const intensityFactor = Math.round((np / ftp) * 1000) / 1000;
+
+          await workoutRepository.updatePowerMetrics(workout.id, {
+            tss,
+            intensityFactor,
+            ftpUsed: ftp,
+          });
+          updated++;
+        } catch {
+          failed++;
+        }
+      }
+
+      res.status(200).json(successResponse({ total: allWorkouts.items.length, updated, failed }));
     } catch (err) {
       next(err);
     }

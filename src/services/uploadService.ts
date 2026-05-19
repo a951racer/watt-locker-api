@@ -13,6 +13,7 @@ import { ValidationError, ConflictError } from '../utils/errors';
 import { WorkoutRecord } from '../models/workout';
 import { config } from '../config/env';
 import { extractArchive, shouldExtractArchive } from '../utils/archiveExtractor';
+import { lookupFtp } from '../utils/ftpLookup';
 
 /** Options for single file upload */
 export interface UploadOptions {
@@ -462,7 +463,13 @@ export class UploadService implements IUploadService {
       normalizedPower,
       source: parsed.summary.normalizedPowerWatts != null ? 'file' : 'computed',
     });
-    const tss = parsed.summary.tss ?? this.computeTSS(parsed.dataPoints, normalizedPower, parsed.summary.durationSeconds);
+
+    // Look up FTP from user history, device, or default
+    const settings = await this.settingsService.getSettings(userId);
+    const ftpUsed = lookupFtp(parsed.summary.startTime, settings.ftpHistory, parsed.summary.ftpWatts);
+
+    const tss = parsed.summary.tss ?? this.computeTSS(normalizedPower, parsed.summary.movingTimeSeconds ?? parsed.summary.durationSeconds, ftpUsed);
+    const intensityFactor = normalizedPower ? Math.round((normalizedPower / ftpUsed) * 1000) / 1000 : undefined;
     const aerobicDecoupling = this.computeAerobicDecoupling(parsed.dataPoints);
     const avgHr = this.computeAverage(parsed.dataPoints, 'heartRateBpm');
     const maxHr = this.computeMax(parsed.dataPoints, 'heartRateBpm');
@@ -475,6 +482,8 @@ export class UploadService implements IUploadService {
       ...(maxPower !== undefined && { maxPowerWatts: maxPower }),
       ...(normalizedPower !== undefined && { normalizedPowerWatts: normalizedPower }),
       ...(tss !== undefined && { tss }),
+      ...(intensityFactor !== undefined && { intensityFactor }),
+      ...(normalizedPower !== undefined && { ftpUsed }),
       ...(aerobicDecoupling !== undefined && { aerobicDecoupling }),
       ...(avgHr !== undefined && { avgHeartRateBpm: avgHr }),
       ...(maxHr !== undefined && { maxHeartRateBpm: maxHr }),
@@ -565,17 +574,15 @@ export class UploadService implements IUploadService {
    * TSS = (duration_s × NP × IF) / (FTP × 3600) × 100
    * where IF = NP / FTP
    * Simplified: TSS = (duration_s × NP²) / (FTP² × 3600) × 100
-   * Uses default FTP of 200W (configurable later via user settings).
    */
   private computeTSS(
-    _dataPoints: ParsedWorkout['dataPoints'],
     normalizedPower: number | undefined,
     durationSeconds: number,
+    ftp: number,
   ): number | undefined {
     if (!normalizedPower || durationSeconds <= 0) return undefined;
 
-    const FTP = 200; // Default FTP — will be user-configurable later
-    const tss = (durationSeconds * Math.pow(normalizedPower, 2)) / (Math.pow(FTP, 2) * 3600) * 100;
+    const tss = (durationSeconds * Math.pow(normalizedPower, 2)) / (Math.pow(ftp, 2) * 3600) * 100;
     return Math.round(tss * 10) / 10;
   }
 
