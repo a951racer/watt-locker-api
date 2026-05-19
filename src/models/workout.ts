@@ -27,22 +27,38 @@ export interface WorkoutRecord {
 
   // Summary
   activityType: string;
+  subActivityType?: string;
   startTime: Date;
   endTime: Date;
   durationSeconds: number;
+  movingTimeSeconds?: number;
   distanceMeters: number;
   elevationGainMeters: number;
+  elevationLossMeters?: number;
+  calories?: number;
+
+  // Temperature
+  avgTemperatureCelsius?: number;
+  maxTemperatureCelsius?: number;
 
   // Averages & Peaks
   avgPowerWatts?: number;
   maxPowerWatts?: number;
   normalizedPowerWatts?: number;
+  totalWorkKj?: number;
+  ftpWatts?: number;
+  intensityFactor?: number;
   tss?: number;
   aerobicDecoupling?: number;
   avgHeartRateBpm?: number;
   maxHeartRateBpm?: number;
   avgCadenceRpm?: number;
+  maxCadenceRpm?: number;
+  totalPedalRevolutions?: number;
   avgSpeedMps?: number;
+  maxSpeedMps?: number;
+  aerobicTrainingEffect?: number;
+  anaerobicTrainingEffect?: number;
 
   // Source tracking
   dataSource: DataSource;
@@ -102,14 +118,28 @@ export interface ParsedWorkout {
   /** Summary data extracted from file headers/laps */
   summary: {
     activityType: string;
+    subActivityType?: string;
     title?: string;
     startTime: Date;
     endTime: Date;
     durationSeconds: number;
+    movingTimeSeconds?: number;
     distanceMeters: number;
     elevationGainMeters: number;
+    elevationLossMeters?: number;
+    calories?: number;
+    avgTemperatureCelsius?: number;
+    maxTemperatureCelsius?: number;
     normalizedPowerWatts?: number;
+    totalWorkKj?: number;
+    ftpWatts?: number;
+    intensityFactor?: number;
     tss?: number;
+    maxCadenceRpm?: number;
+    totalPedalRevolutions?: number;
+    maxSpeedMps?: number;
+    aerobicTrainingEffect?: number;
+    anaerobicTrainingEffect?: number;
     laps?: LapSummary[];
   };
 

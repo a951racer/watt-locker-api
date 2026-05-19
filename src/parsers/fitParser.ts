@@ -227,16 +227,44 @@ export class FitFileParser implements WorkoutParser {
     // Extract pre-computed metrics from session if available
     const sessionNP = session?.normalized_power != null ? Number(session.normalized_power) : undefined;
     const sessionTSS = session?.training_stress_score != null ? Number(session.training_stress_score) : undefined;
+    const movingTimeSeconds = session?.total_timer_time != null ? Number(session.total_timer_time) : undefined;
+    const elevationLossMeters = session?.total_descent != null ? Number(session.total_descent) : undefined;
+    const calories = session?.total_calories != null ? Number(session.total_calories) : undefined;
+    const avgTemp = session?.avg_temperature != null ? Number(session.avg_temperature) : undefined;
+    const maxTemp = session?.max_temperature != null ? Number(session.max_temperature) : undefined;
+    const totalWorkKj = session?.total_work != null ? Math.round(Number(session.total_work) / 1000) : undefined;
+    const ftpWatts = session?.threshold_power != null ? Number(session.threshold_power) : undefined;
+    const intensityFactor = session?.intensity_factor != null ? Number(session.intensity_factor) : undefined;
+    const maxCadenceRpm = session?.max_cadence != null ? Number(session.max_cadence) : undefined;
+    const totalPedalRevolutions = session?.total_cycles != null ? Number(session.total_cycles) : undefined;
+    const maxSpeedMps = session?.max_speed != null ? Number(session.max_speed) : (session?.enhanced_max_speed != null ? Number(session.enhanced_max_speed) : undefined);
+    const subActivityType = session?.sub_sport != null ? String(session.sub_sport) : undefined;
+    const aerobicTrainingEffect = session?.total_training_effect != null ? Number(session.total_training_effect) : undefined;
+    const anaerobicTrainingEffect = session?.total_anaerobic_training_effect != null ? Number(session.total_anaerobic_training_effect) : undefined;
 
     return {
       activityType,
+      subActivityType,
       startTime,
       endTime,
       durationSeconds,
+      movingTimeSeconds,
       distanceMeters,
       elevationGainMeters,
+      elevationLossMeters,
+      calories,
+      avgTemperatureCelsius: avgTemp,
+      maxTemperatureCelsius: maxTemp,
       normalizedPowerWatts: sessionNP,
+      totalWorkKj,
+      ftpWatts,
+      intensityFactor,
       tss: sessionTSS,
+      maxCadenceRpm,
+      totalPedalRevolutions,
+      maxSpeedMps,
+      aerobicTrainingEffect,
+      anaerobicTrainingEffect,
       laps: laps.length > 0 ? laps : undefined,
     };
   }

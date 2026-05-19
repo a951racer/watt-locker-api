@@ -28,20 +28,34 @@ export interface WorkoutDocument {
   _id: ObjectId;
   userId: string;
   activityType: string;
+  subActivityType?: string;
   startTime: Date;
   endTime: Date;
   durationSeconds: number;
+  movingTimeSeconds?: number;
   distanceMeters: number;
   elevationGainMeters: number;
+  elevationLossMeters?: number;
+  calories?: number;
+  avgTemperatureCelsius?: number;
+  maxTemperatureCelsius?: number;
   avgPowerWatts?: number;
   maxPowerWatts?: number;
   normalizedPowerWatts?: number;
+  totalWorkKj?: number;
+  ftpWatts?: number;
+  intensityFactor?: number;
   tss?: number;
   aerobicDecoupling?: number;
   avgHeartRateBpm?: number;
   maxHeartRateBpm?: number;
   avgCadenceRpm?: number;
+  maxCadenceRpm?: number;
+  totalPedalRevolutions?: number;
   avgSpeedMps?: number;
+  maxSpeedMps?: number;
+  aerobicTrainingEffect?: number;
+  anaerobicTrainingEffect?: number;
   dataSource: string;
   sourceActivityId?: string;
   fileFormat: string;
@@ -130,12 +144,26 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     if (workout.avgPowerWatts !== undefined) doc.avgPowerWatts = workout.avgPowerWatts;
     if (workout.maxPowerWatts !== undefined) doc.maxPowerWatts = workout.maxPowerWatts;
     if (workout.normalizedPowerWatts !== undefined) doc.normalizedPowerWatts = workout.normalizedPowerWatts;
+    if (workout.totalWorkKj !== undefined) doc.totalWorkKj = workout.totalWorkKj;
+    if (workout.ftpWatts !== undefined) doc.ftpWatts = workout.ftpWatts;
+    if (workout.intensityFactor !== undefined) doc.intensityFactor = workout.intensityFactor;
     if (workout.tss !== undefined) doc.tss = workout.tss;
     if (workout.aerobicDecoupling !== undefined) doc.aerobicDecoupling = workout.aerobicDecoupling;
     if (workout.avgHeartRateBpm !== undefined) doc.avgHeartRateBpm = workout.avgHeartRateBpm;
     if (workout.maxHeartRateBpm !== undefined) doc.maxHeartRateBpm = workout.maxHeartRateBpm;
     if (workout.avgCadenceRpm !== undefined) doc.avgCadenceRpm = workout.avgCadenceRpm;
+    if (workout.maxCadenceRpm !== undefined) doc.maxCadenceRpm = workout.maxCadenceRpm;
+    if (workout.totalPedalRevolutions !== undefined) doc.totalPedalRevolutions = workout.totalPedalRevolutions;
     if (workout.avgSpeedMps !== undefined) doc.avgSpeedMps = workout.avgSpeedMps;
+    if (workout.maxSpeedMps !== undefined) doc.maxSpeedMps = workout.maxSpeedMps;
+    if (workout.aerobicTrainingEffect !== undefined) doc.aerobicTrainingEffect = workout.aerobicTrainingEffect;
+    if (workout.anaerobicTrainingEffect !== undefined) doc.anaerobicTrainingEffect = workout.anaerobicTrainingEffect;
+    if (workout.subActivityType !== undefined) doc.subActivityType = workout.subActivityType;
+    if (workout.movingTimeSeconds !== undefined) doc.movingTimeSeconds = workout.movingTimeSeconds;
+    if (workout.elevationLossMeters !== undefined) doc.elevationLossMeters = workout.elevationLossMeters;
+    if (workout.calories !== undefined) doc.calories = workout.calories;
+    if (workout.avgTemperatureCelsius !== undefined) doc.avgTemperatureCelsius = workout.avgTemperatureCelsius;
+    if (workout.maxTemperatureCelsius !== undefined) doc.maxTemperatureCelsius = workout.maxTemperatureCelsius;
     if (workout.sourceActivityId !== undefined) doc.sourceActivityId = workout.sourceActivityId;
     if (workout.driveWebViewLink !== undefined) doc.driveWebViewLink = workout.driveWebViewLink;
     if (workout.title !== undefined) doc.title = workout.title;
@@ -326,20 +354,34 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
       id: doc._id.toHexString(),
       userId: doc.userId,
       activityType: doc.activityType,
+      subActivityType: doc.subActivityType,
       startTime: doc.startTime,
       endTime: doc.endTime,
       durationSeconds: doc.durationSeconds,
+      movingTimeSeconds: doc.movingTimeSeconds,
       distanceMeters: doc.distanceMeters,
       elevationGainMeters: doc.elevationGainMeters,
+      elevationLossMeters: doc.elevationLossMeters,
+      calories: doc.calories,
+      avgTemperatureCelsius: doc.avgTemperatureCelsius,
+      maxTemperatureCelsius: doc.maxTemperatureCelsius,
       avgPowerWatts: doc.avgPowerWatts,
       maxPowerWatts: doc.maxPowerWatts,
       normalizedPowerWatts: doc.normalizedPowerWatts,
+      totalWorkKj: doc.totalWorkKj,
+      ftpWatts: doc.ftpWatts,
+      intensityFactor: doc.intensityFactor,
       tss: doc.tss,
       aerobicDecoupling: doc.aerobicDecoupling,
       avgHeartRateBpm: doc.avgHeartRateBpm,
       maxHeartRateBpm: doc.maxHeartRateBpm,
       avgCadenceRpm: doc.avgCadenceRpm,
+      maxCadenceRpm: doc.maxCadenceRpm,
+      totalPedalRevolutions: doc.totalPedalRevolutions,
       avgSpeedMps: doc.avgSpeedMps,
+      maxSpeedMps: doc.maxSpeedMps,
+      aerobicTrainingEffect: doc.aerobicTrainingEffect,
+      anaerobicTrainingEffect: doc.anaerobicTrainingEffect,
       dataSource: doc.dataSource as WorkoutRecord['dataSource'],
       sourceActivityId: doc.sourceActivityId,
       fileFormat: doc.fileFormat as WorkoutRecord['fileFormat'],
