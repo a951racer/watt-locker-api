@@ -468,7 +468,13 @@ export class UploadService implements IUploadService {
     const settings = await this.settingsService.getSettings(userId);
     const ftpUsed = lookupFtp(parsed.summary.startTime, settings.ftpHistory, parsed.summary.ftpWatts);
 
-    const tss = parsed.summary.tss ?? this.computeTSS(normalizedPower, parsed.summary.movingTimeSeconds ?? parsed.summary.durationSeconds, ftpUsed);
+    // If FTP came from user history, always recompute TSS (device TSS used wrong FTP).
+    // Only trust file TSS when no user history covers this date.
+    const ftpFromHistory = settings.ftpHistory && settings.ftpHistory.length > 0 &&
+      [...settings.ftpHistory].some(e => new Date(e.effectiveDate).getTime() <= parsed.summary.startTime.getTime());
+    const tss = ftpFromHistory
+      ? this.computeTSS(normalizedPower, parsed.summary.movingTimeSeconds ?? parsed.summary.durationSeconds, ftpUsed)
+      : (parsed.summary.tss ?? this.computeTSS(normalizedPower, parsed.summary.movingTimeSeconds ?? parsed.summary.durationSeconds, ftpUsed));
     const intensityFactor = normalizedPower ? Math.round((normalizedPower / ftpUsed) * 1000) / 1000 : undefined;
     const aerobicDecoupling = this.computeAerobicDecoupling(parsed.dataPoints);
     const avgHr = this.computeAverage(parsed.dataPoints, 'heartRateBpm');
