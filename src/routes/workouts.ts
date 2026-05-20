@@ -47,8 +47,8 @@ export function createWorkoutsRouter(
   router.get('/performance-metrics', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const days = req.query.days ? parseInt(req.query.days as string, 10) : 90;
-      if (isNaN(days) || days < 1 || days > 365) {
-        throw new ValidationError('days must be between 1 and 365', { field: 'days' });
+      if (isNaN(days) || days < 1 || days > 3650) {
+        throw new ValidationError('days must be between 1 and 3650', { field: 'days' });
       }
 
       // Fetch all workouts for the user (need full history for accurate CTL)
