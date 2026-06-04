@@ -48,6 +48,7 @@ export interface WorkoutDocument {
   intensityFactor?: number;
   tss?: number;
   aerobicDecoupling?: number;
+  maxPowers?: Record<string, number>;
   avgHeartRateBpm?: number;
   maxHeartRateBpm?: number;
   avgCadenceRpm?: number;
@@ -99,6 +100,7 @@ export interface IWorkoutRepository {
     id: string,
     metrics: { tss?: number; intensityFactor?: number; ftpUsed?: number },
   ): Promise<WorkoutRecord>;
+  updateMaxPowers(id: string, maxPowers: Record<string, number>): Promise<WorkoutRecord>;
   delete(id: string): Promise<void>;
   findDuplicate(userId: string, startTime: Date, durationSeconds: number): Promise<WorkoutRecord | null>;
   findBySourceActivityId(userId: string, sourceActivityId: string): Promise<WorkoutRecord | null>;
@@ -156,6 +158,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     if (workout.intensityFactor !== undefined) doc.intensityFactor = workout.intensityFactor;
     if (workout.tss !== undefined) doc.tss = workout.tss;
     if (workout.aerobicDecoupling !== undefined) doc.aerobicDecoupling = workout.aerobicDecoupling;
+    if (workout.maxPowers !== undefined) doc.maxPowers = workout.maxPowers;
     if (workout.avgHeartRateBpm !== undefined) doc.avgHeartRateBpm = workout.avgHeartRateBpm;
     if (workout.maxHeartRateBpm !== undefined) doc.maxHeartRateBpm = workout.maxHeartRateBpm;
     if (workout.avgCadenceRpm !== undefined) doc.avgCadenceRpm = workout.avgCadenceRpm;
@@ -293,6 +296,24 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     return this.toWorkoutRecord(result as unknown as WorkoutDocument);
   }
 
+  async updateMaxPowers(id: string, maxPowers: Record<string, number>): Promise<WorkoutRecord> {
+    if (!ObjectId.isValid(id)) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    const result = await this.workouts.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { maxPowers, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+
+    if (!result) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    return this.toWorkoutRecord(result as unknown as WorkoutDocument);
+  }
+
   async delete(id: string): Promise<void> {
     if (!ObjectId.isValid(id)) {
       throw new Error(`Workout not found: ${id}`);
@@ -410,6 +431,7 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
       intensityFactor: doc.intensityFactor,
       tss: doc.tss,
       aerobicDecoupling: doc.aerobicDecoupling,
+      maxPowers: doc.maxPowers,
       avgHeartRateBpm: doc.avgHeartRateBpm,
       maxHeartRateBpm: doc.maxHeartRateBpm,
       avgCadenceRpm: doc.avgCadenceRpm,

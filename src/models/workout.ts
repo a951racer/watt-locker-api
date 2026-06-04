@@ -51,6 +51,7 @@ export interface WorkoutRecord {
   intensityFactor?: number;
   tss?: number;
   aerobicDecoupling?: number;
+  maxPowers?: Record<string, number>; // key = duration in seconds, value = max avg watts
   avgHeartRateBpm?: number;
   maxHeartRateBpm?: number;
   avgCadenceRpm?: number;
