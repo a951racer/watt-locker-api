@@ -14,6 +14,7 @@ import { WorkoutRecord } from '../models/workout';
 import { config } from '../config/env';
 import { extractArchive, shouldExtractArchive } from '../utils/archiveExtractor';
 import { lookupFtp } from '../utils/ftpLookup';
+import { computeMaxPowers } from '../utils/powerCurve';
 
 /** Options for single file upload */
 export interface UploadOptions {
@@ -482,6 +483,12 @@ export class UploadService implements IUploadService {
     const avgCadence = this.computeAverage(parsed.dataPoints, 'cadenceRpm');
     const avgSpeed = this.computeAverage(parsed.dataPoints, 'speedMps');
 
+    // Compute max powers (power curve)
+    const powerValues = parsed.dataPoints
+      .map(dp => dp.powerWatts)
+      .filter((v): v is number => v != null);
+    const maxPowers = powerValues.length >= 5 ? computeMaxPowers(powerValues) : undefined;
+
     const fullRecord = {
       ...record,
       ...(avgPower !== undefined && { avgPowerWatts: avgPower }),
@@ -491,6 +498,7 @@ export class UploadService implements IUploadService {
       ...(intensityFactor !== undefined && { intensityFactor }),
       ...(normalizedPower !== undefined && { ftpUsed }),
       ...(aerobicDecoupling !== undefined && { aerobicDecoupling }),
+      ...(maxPowers !== undefined && { maxPowers }),
       ...(avgHr !== undefined && { avgHeartRateBpm: avgHr }),
       ...(maxHr !== undefined && { maxHeartRateBpm: maxHr }),
       ...(avgCadence !== undefined && { avgCadenceRpm: avgCadence }),

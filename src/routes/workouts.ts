@@ -6,6 +6,7 @@ import { IWorkoutRepository } from '../repositories/workoutRepository';
 import { ValidationError } from '../utils/errors';
 import { successResponse } from '../utils/response';
 import { lookupFtp } from '../utils/ftpLookup';
+import { computeMaxPowers } from '../utils/powerCurve';
 
 /**
  * Creates the workouts router with injected dependencies.
@@ -171,6 +172,123 @@ export function createWorkoutsRouter(
       }
 
       res.status(200).json(successResponse({ total: allWorkouts.items.length, updated, failed }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/workouts/power-curve
+   * Return workouts with maxPowers data within a date range.
+   * Query params: months (default 6)
+   */
+  router.get('/power-curve', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!workoutRepository) {
+        throw new ValidationError('Power curve endpoint is not configured');
+      }
+
+      const months = req.query.months ? parseInt(req.query.months as string, 10) : 6;
+      if (isNaN(months) || months < 1 || months > 120) {
+        throw new ValidationError('months must be between 1 and 120', { field: 'months' });
+      }
+
+      const userId = req.user!.userId;
+      const dateFrom = new Date();
+      dateFrom.setMonth(dateFrom.getMonth() - months);
+
+      const allWorkouts = await workoutService.listWorkouts(userId, {
+        page: 1,
+        pageSize: 10000,
+        sortBy: 'date',
+        sortOrder: 'desc',
+        dateFrom,
+      });
+
+      const results = allWorkouts.items
+        .filter((w) => (w as unknown as Record<string, unknown>).maxPowers != null)
+        .map((w) => ({
+          workoutId: w.id,
+          date: w.startTime instanceof Date ? w.startTime.toISOString().split('T')[0] : new Date(w.startTime).toISOString().split('T')[0],
+          title: w.title,
+          maxPowers: (w as unknown as Record<string, unknown>).maxPowers,
+        }));
+
+      res.status(200).json(successResponse(results));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/workouts/compute-power-curves
+   * Backfill maxPowers for workouts that don't have it yet.
+   * Fetches time-series metrics and computes power curves.
+   */
+  router.post('/compute-power-curves', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!workoutRepository) {
+        throw new ValidationError('Compute power curves endpoint is not configured');
+      }
+
+      const userId = req.user!.userId;
+
+      // Fetch all workouts for the user
+      const allWorkouts = await workoutService.listWorkouts(userId, {
+        page: 1,
+        pageSize: 10000,
+        sortBy: 'date',
+        sortOrder: 'desc',
+      });
+
+      // Filter to workouts without maxPowers
+      const workoutsToProcess = allWorkouts.items.filter(
+        (w) => (w as unknown as Record<string, unknown>).maxPowers == null,
+      );
+
+      let computed = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      for (const workout of workoutsToProcess) {
+        try {
+          const metrics = await workoutRepository.queryMetrics({
+            workoutId: workout.id,
+            timeFrom: workout.startTime instanceof Date ? workout.startTime : new Date(workout.startTime),
+            timeTo: workout.endTime instanceof Date ? workout.endTime : new Date(workout.endTime),
+          });
+
+          const powerValues = metrics
+            .map((m) => m.powerWatts)
+            .filter((v): v is number => v != null);
+
+          if (powerValues.length < 5) {
+            skipped++;
+            continue;
+          }
+
+          const maxPwrs = computeMaxPowers(powerValues);
+
+          if (Object.keys(maxPwrs).length === 0) {
+            skipped++;
+            continue;
+          }
+
+          await workoutRepository.updateMaxPowers(workout.id, maxPwrs);
+          computed++;
+        } catch {
+          failed++;
+        }
+      }
+
+      res.status(200).json(
+        successResponse({
+          total: workoutsToProcess.length,
+          computed,
+          skipped,
+          failed,
+        }),
+      );
     } catch (err) {
       next(err);
     }
