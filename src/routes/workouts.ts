@@ -266,6 +266,9 @@ export function createWorkoutsRouter(
    * POST /api/workouts/compute-power-curves
    * Backfill maxPowers for workouts that don't have it yet.
    * Fetches time-series metrics and computes power curves.
+   * Query params:
+   *   force=true - recompute all (not just missing)
+   *   batchSize - max workouts to process per request (default 20, avoids Heroku 30s timeout)
    */
   router.post('/compute-power-curves', async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -274,6 +277,7 @@ export function createWorkoutsRouter(
       }
 
       const userId = req.user!.userId;
+      const batchSize = Math.min(Number(req.query.batchSize) || 20, 100);
 
       // Fetch all workouts for the user
       const allWorkouts = await workoutService.listWorkouts(userId, {
@@ -291,11 +295,13 @@ export function createWorkoutsRouter(
             (w) => (w as unknown as Record<string, unknown>).maxPowers == null,
           );
 
+      // Process only a batch to stay within Heroku's 30s timeout
+      const batch = workoutsToProcess.slice(0, batchSize);
       let computed = 0;
       let skipped = 0;
       let failed = 0;
 
-      for (const workout of workoutsToProcess) {
+      for (const workout of batch) {
         try {
           const metrics = await workoutRepository.queryMetrics({
             workoutId: workout.id,
@@ -329,6 +335,7 @@ export function createWorkoutsRouter(
       res.status(200).json(
         successResponse({
           total: workoutsToProcess.length,
+          remaining: workoutsToProcess.length - batch.length,
           computed,
           skipped,
           failed,
