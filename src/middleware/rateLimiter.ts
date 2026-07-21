@@ -35,12 +35,12 @@ const baseOptions: Partial<Options> = {
 
 /**
  * General API rate limiter.
- * Allows 100 requests per 15-minute window per IP.
+ * Allows 300 requests per 15-minute window per IP.
  */
 export const generalLimiter = rateLimit({
   ...baseOptions,
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 300,
 });
 
 /**

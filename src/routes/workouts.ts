@@ -277,7 +277,7 @@ export function createWorkoutsRouter(
       }
 
       const userId = req.user!.userId;
-      const batchSize = Math.min(Number(req.query.batchSize) || 20, 100);
+      const batchSize = Math.min(Number(req.query.batchSize) || 50, 200);
 
       // Fetch all workouts for the user
       const allWorkouts = await workoutService.listWorkouts(userId, {
