@@ -481,7 +481,7 @@ export class UploadService implements IUploadService {
     const avgHr = this.computeAverage(parsed.dataPoints, 'heartRateBpm');
     const maxHr = this.computeMax(parsed.dataPoints, 'heartRateBpm');
     const avgCadence = this.computeAverage(parsed.dataPoints, 'cadenceRpm');
-    const avgSpeed = this.computeAverage(parsed.dataPoints, 'speedMps');
+    const avgSpeed = this.computeAvgSpeed(parsed.summary.distanceMeters, parsed.summary.movingTimeSeconds, parsed.summary.durationSeconds);
 
     // Compute max powers (power curve)
     const powerValues = parsed.dataPoints
@@ -529,6 +529,21 @@ export class UploadService implements IUploadService {
 
     if (values.length === 0) return undefined;
     return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+  }
+
+  /**
+   * Compute average speed from distance and time.
+   * Uses moving time when available, falls back to elapsed duration.
+   * Returns speed in m/s rounded to 2 decimal places.
+   */
+  private computeAvgSpeed(
+    distanceMeters: number,
+    movingTimeSeconds?: number,
+    durationSeconds?: number,
+  ): number | undefined {
+    const timeSeconds = movingTimeSeconds ?? durationSeconds;
+    if (!timeSeconds || timeSeconds <= 0 || !distanceMeters || distanceMeters <= 0) return undefined;
+    return Math.round((distanceMeters / timeSeconds) * 100) / 100;
   }
 
   /** Compute max of a numeric field from data points (ignoring undefined) */

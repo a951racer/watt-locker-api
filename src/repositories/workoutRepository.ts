@@ -100,6 +100,7 @@ export interface IWorkoutRepository {
     id: string,
     metrics: { tss?: number; intensityFactor?: number; ftpUsed?: number },
   ): Promise<WorkoutRecord>;
+  updateAvgSpeed(id: string, avgSpeedMps: number): Promise<WorkoutRecord>;
   updateMaxPowers(id: string, maxPowers: Record<string, number>): Promise<WorkoutRecord>;
   delete(id: string): Promise<void>;
   findDuplicate(userId: string, startTime: Date, durationSeconds: number): Promise<WorkoutRecord | null>;
@@ -286,6 +287,24 @@ export class MongoWorkoutRepository implements IWorkoutRepository {
     const result = await this.workouts.findOneAndUpdate(
       { _id: new ObjectId(id) },
       { $set },
+      { returnDocument: 'after' },
+    );
+
+    if (!result) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    return this.toWorkoutRecord(result as unknown as WorkoutDocument);
+  }
+
+  async updateAvgSpeed(id: string, avgSpeedMps: number): Promise<WorkoutRecord> {
+    if (!ObjectId.isValid(id)) {
+      throw new Error(`Workout not found: ${id}`);
+    }
+
+    const result = await this.workouts.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { avgSpeedMps, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
 
