@@ -178,6 +178,48 @@ export function createWorkoutsRouter(
   });
 
   /**
+   * POST /api/workouts/recalculate-speed
+   * Recalculate avgSpeedMps for all workouts using distance / movingTime (or duration).
+   */
+  router.post('/recalculate-speed', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!workoutRepository) {
+        throw new ValidationError('Recalculate-speed endpoint is not configured');
+      }
+
+      const userId = req.user!.userId;
+
+      const allWorkouts = await workoutService.listWorkouts(userId, {
+        page: 1,
+        pageSize: 10000,
+        sortBy: 'date',
+        sortOrder: 'asc',
+      });
+
+      let updated = 0;
+      let failed = 0;
+
+      for (const workout of allWorkouts.items) {
+        try {
+          const timeSeconds = workout.movingTimeSeconds ?? workout.durationSeconds;
+          if (!timeSeconds || timeSeconds <= 0 || !workout.distanceMeters || workout.distanceMeters <= 0) continue;
+
+          const avgSpeedMps = Math.round((workout.distanceMeters / timeSeconds) * 100) / 100;
+
+          await workoutRepository.updateAvgSpeed(workout.id, avgSpeedMps);
+          updated++;
+        } catch {
+          failed++;
+        }
+      }
+
+      res.status(200).json(successResponse({ total: allWorkouts.items.length, updated, failed }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
    * GET /api/workouts/power-curve
    * Return workouts with maxPowers data within a date range.
    * Query params: months (default 6)
