@@ -283,10 +283,13 @@ export function createWorkoutsRouter(
         sortOrder: 'desc',
       });
 
-      // Filter to workouts without maxPowers
-      const workoutsToProcess = allWorkouts.items.filter(
-        (w) => (w as unknown as Record<string, unknown>).maxPowers == null,
-      );
+      // Filter to workouts without maxPowers (unless force=true to recompute all)
+      const force = req.query.force === 'true';
+      const workoutsToProcess = force
+        ? allWorkouts.items
+        : allWorkouts.items.filter(
+            (w) => (w as unknown as Record<string, unknown>).maxPowers == null,
+          );
 
       let computed = 0;
       let skipped = 0;

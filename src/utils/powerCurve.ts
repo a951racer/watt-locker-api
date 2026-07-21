@@ -6,7 +6,7 @@
  */
 export function computeMaxPowers(
   powerData: number[],
-  durations: number[] = [1, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200],
+  durations: number[] = [1, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800, 14400, 18000],
 ): Record<string, number> {
   const result: Record<string, number> = {};
 
