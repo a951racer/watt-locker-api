@@ -269,7 +269,6 @@ export function createWorkoutsRouter(
    * Query params:
    *   force=true - recompute all (not just missing)
    *   batchSize - max workouts to process per request (default 50, avoids Heroku 30s timeout)
-   *   skip - number of workouts to skip (for pagination through batches)
    */
   router.post('/compute-power-curves', async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -279,7 +278,6 @@ export function createWorkoutsRouter(
 
       const userId = req.user!.userId;
       const batchSize = Math.min(Number(req.query.batchSize) || 50, 200);
-      const skip = Number(req.query.skip) || 0;
 
       // Fetch all workouts for the user
       const allWorkouts = await workoutService.listWorkouts(userId, {
@@ -297,9 +295,8 @@ export function createWorkoutsRouter(
             (w) => (w as unknown as Record<string, unknown>).maxPowers == null,
           );
 
-      const total = workoutsToProcess.length;
-      // Process only a batch starting from skip offset
-      const batch = workoutsToProcess.slice(skip, skip + batchSize);
+      // Process only a batch to stay within Heroku's 30s timeout
+      const batch = workoutsToProcess.slice(0, batchSize);
       let computed = 0;
       let skipped = 0;
       let failed = 0;
@@ -335,13 +332,8 @@ export function createWorkoutsRouter(
         }
       }
 
-      const nextSkip = skip + batchSize;
-      const remaining = Math.max(0, total - nextSkip);
-
       res.status(200).json(
         successResponse({
-          total,
-          remaining,
           computed,
           skipped,
           failed,
