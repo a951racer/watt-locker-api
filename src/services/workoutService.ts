@@ -4,7 +4,7 @@
  * for optional file removal on delete.
  */
 
-import { WorkoutRecord, WorkoutMetadata } from '../models/workout';
+import { WorkoutRecord, WorkoutMetadata, ActivityUpdateFields } from '../models/workout';
 import { PaginatedResult } from '../models/api';
 import { IWorkoutRepository, WorkoutQuery } from '../repositories/workoutRepository';
 import { FileStorageAdapter, StorageReference } from '../storage/googleDriveAdapter';
@@ -20,6 +20,9 @@ export interface ListWorkoutsOptions {
   dateTo?: Date;
   activityType?: string;
   dataSource?: string;
+  status?: string[];
+  template?: boolean;
+  search?: string;
 }
 
 /** Options for deleting a workout */
@@ -34,7 +37,7 @@ export interface IWorkoutService {
   updateWorkout(
     workoutId: string,
     userId: string,
-    updates: Partial<WorkoutMetadata>,
+    updates: Partial<WorkoutMetadata> | ActivityUpdateFields,
   ): Promise<WorkoutRecord>;
   deleteWorkout(
     workoutId: string,
@@ -86,6 +89,9 @@ export class WorkoutService implements IWorkoutService {
       dateTo: options?.dateTo,
       activityType: options?.activityType,
       dataSource: options?.dataSource,
+      status: options?.status,
+      template: options?.template,
+      search: options?.search,
     };
 
     return this.workoutRepository.findMany(query);
@@ -98,7 +104,7 @@ export class WorkoutService implements IWorkoutService {
   async updateWorkout(
     workoutId: string,
     userId: string,
-    updates: Partial<WorkoutMetadata>,
+    updates: Partial<WorkoutMetadata> | ActivityUpdateFields,
   ): Promise<WorkoutRecord> {
     // Verify ownership before updating
     const workout = await this.workoutRepository.findById(workoutId);

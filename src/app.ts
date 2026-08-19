@@ -16,6 +16,7 @@ import { createWebhookRouter } from './routes/webhooks';
 import { createSettingsRouter } from './routes/settings';
 import { createWorkoutsRouter } from './routes/workouts';
 import { createGoogleAuthRouter } from './routes/googleAuth';
+import { createSourceArtifactsRouter } from './routes/sourceArtifacts';
 
 // Services
 import { AuthService } from './services/authService';
@@ -28,6 +29,7 @@ import { UploadService } from './services/uploadService';
 import { MongoUserRepository } from './repositories/userRepository';
 import { MongoSettingsRepository } from './repositories/settingsRepository';
 import { MongoWorkoutRepository } from './repositories/workoutRepository';
+import { MongoSourceArtifactRepository } from './repositories/sourceArtifactRepository';
 
 // Parsers & Storage
 import { DefaultParserFactory } from './parsers/parserFactory';
@@ -56,6 +58,7 @@ export function createApp(deps: AppDependencies): Express {
   const userRepository = new MongoUserRepository(deps.db);
   const settingsRepository = new MongoSettingsRepository(deps.db);
   const workoutRepository = new MongoWorkoutRepository(deps.db);
+  const sourceArtifactRepository = new MongoSourceArtifactRepository(deps.db);
 
   // --- Services ---
   const authService = new AuthService(userRepository);
@@ -75,6 +78,8 @@ export function createApp(deps: AppDependencies): Express {
     workoutRepository,
     fileStorageAdapter,
     settingsService,
+    undefined, // default logger
+    sourceArtifactRepository,
   );
 
   const workoutService = new WorkoutService(workoutRepository, fileStorageAdapter);
@@ -116,7 +121,10 @@ export function createApp(deps: AppDependencies): Express {
   app.use('/api/settings', createSettingsRouter(settingsService, authMiddleware));
 
   // Workout routes — JWT auth applied inside the router
-  app.use('/api/workouts', createWorkoutsRouter(workoutService, uploadService, authMiddleware, settingsService, workoutRepository));
+  app.use('/api/workouts', createWorkoutsRouter(workoutService, uploadService, authMiddleware, settingsService, workoutRepository, sourceArtifactRepository));
+
+  // Source artifact routes — JWT auth applied inside the router
+  app.use('/api/source-artifacts', createSourceArtifactsRouter(sourceArtifactRepository, workoutRepository, authMiddleware, uploadService, fileStorageAdapter));
 
   // --- Error Handler (must be last) ---
   app.use(errorHandler);

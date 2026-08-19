@@ -35,6 +35,9 @@ describe('MongoWorkoutRepository', () => {
     return {
       id: '',
       userId: 'user-1',
+      status: 'completed',
+      template: false,
+      date: '2024-06-15',
       activityType: 'ride',
       startTime: new Date('2024-06-15T08:00:00Z'),
       endTime: new Date('2024-06-15T09:30:00Z'),
@@ -200,11 +203,11 @@ describe('MongoWorkoutRepository', () => {
 
       const result = await repo.findMany({ userId: 'user-1', page: 1, pageSize: 10 });
 
-      expect(result.items[0].startTime.getTime()).toBeGreaterThan(
-        result.items[1].startTime.getTime(),
+      expect(result.items[0].startTime!.getTime()).toBeGreaterThan(
+        result.items[1].startTime!.getTime(),
       );
-      expect(result.items[1].startTime.getTime()).toBeGreaterThan(
-        result.items[2].startTime.getTime(),
+      expect(result.items[1].startTime!.getTime()).toBeGreaterThan(
+        result.items[2].startTime!.getTime(),
       );
     });
 
@@ -585,6 +588,64 @@ describe('MongoWorkoutRepository', () => {
           }),
         ),
       ).resolves.not.toThrow();
+    });
+
+    it('should create calendar index (userId, date, status)', async () => {
+      const indexes = await db.collection('workouts').indexes();
+      const calendarIndex = indexes.find(
+        (idx) => idx.key && idx.key.userId === 1 && idx.key.date === 1 && idx.key.status === 1,
+      );
+      expect(calendarIndex).toBeDefined();
+    });
+
+    it('should create template index (userId, template)', async () => {
+      const indexes = await db.collection('workouts').indexes();
+      const templateIndex = indexes.find(
+        (idx) => idx.key && idx.key.userId === 1 && idx.key.template === 1,
+      );
+      expect(templateIndex).toBeDefined();
+    });
+
+    it('should be safe to call createIndexes repeatedly', async () => {
+      // Already called in beforeAll; calling again should not throw
+      await expect(repo.createIndexes()).resolves.not.toThrow();
+      // Verify indexes still exist (not dropped/corrupted)
+      const indexes = await db.collection('workouts').indexes();
+      expect(indexes.length).toBeGreaterThanOrEqual(5); // _id + 4 custom indexes
+    });
+
+    it('should use calendar index for date-range + status query', async () => {
+      // Insert test data with the new fields
+      await repo.create(makeWorkout({ date: '2024-06-15', status: 'completed' }));
+      await repo.create(makeWorkout({ date: '2024-06-16', status: 'planned', startTime: undefined, endTime: undefined, distanceMeters: undefined, elevationGainMeters: undefined }));
+
+      // Run explain on a calendar-style query
+      const explanation = await db.collection('workouts').find({
+        userId: 'user-1',
+        date: { $gte: '2024-06-14', $lte: '2024-06-17' },
+        status: 'completed',
+        template: false,
+      }).explain('executionStats');
+
+      // The winning plan should use an IXSCAN (index scan) rather than COLLSCAN
+      const winningPlan = (explanation as Record<string, unknown>).queryPlanner as Record<string, unknown>;
+      const planStr = JSON.stringify(winningPlan);
+      // In MongoDB memory server, verify it doesn't do a full collection scan
+      // (IXSCAN indicates index usage; the calendar index should be selected)
+      expect(planStr).toContain('IXSCAN');
+    });
+
+    it('should use template index for template query', async () => {
+      await repo.create(makeWorkout({ template: true, status: 'completed' }));
+
+      const explanation = await db.collection('workouts').find({
+        userId: 'user-1',
+        template: true,
+      }).explain('executionStats');
+
+      const winningPlan = (explanation as Record<string, unknown>).queryPlanner as Record<string, unknown>;
+      const planStr = JSON.stringify(winningPlan);
+      expect(planStr).toContain('IXSCAN');
     });
   });
 });

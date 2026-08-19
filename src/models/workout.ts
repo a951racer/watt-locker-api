@@ -20,20 +20,36 @@ export type MetricType =
   | 'gps'
   | 'temperature';
 
+/** Activity lifecycle status */
+export type ActivityStatus = 'planned' | 'completed' | 'skipped';
+
 /** A single workout record stored in the database */
 export interface WorkoutRecord {
   id: string;
   userId: string;
 
+  // Lifecycle
+  status: ActivityStatus | null;
+  template: boolean;
+  date: string | null; // YYYY-MM-DD calendar date, null for templates
+
+  // Planned values
+  plannedDurationSeconds?: number;
+  plannedDistanceMeters?: number;
+  plannedTss?: number;
+  plannedIf?: number;
+  plannedTssOverride?: boolean;
+  plannedIfOverride?: boolean;
+
   // Summary
   activityType: string;
   subActivityType?: string;
-  startTime: Date;
-  endTime: Date;
-  durationSeconds: number;
+  startTime?: Date;
+  endTime?: Date;
+  durationSeconds?: number;
   movingTimeSeconds?: number;
-  distanceMeters: number;
-  elevationGainMeters: number;
+  distanceMeters?: number;
+  elevationGainMeters?: number;
   elevationLossMeters?: number;
   calories?: number;
 
@@ -63,12 +79,12 @@ export interface WorkoutRecord {
   anaerobicTrainingEffect?: number;
 
   // Source tracking
-  dataSource: DataSource;
+  dataSource?: DataSource;
   sourceActivityId?: string;
-  fileFormat: WorkoutFileFormat;
+  fileFormat?: WorkoutFileFormat;
 
   // Storage references
-  driveFileId: string;
+  driveFileId?: string;
   driveWebViewLink?: string;
 
   // Metadata
@@ -76,6 +92,19 @@ export interface WorkoutRecord {
   description?: string;
   comment?: string;
   tags?: string[];
+
+  // Planning-specific fields
+  segments?: unknown[];
+  targetSpeed?: number;
+  targetPowerMin?: number;
+  targetPowerMax?: number;
+  targetHrMin?: number;
+  targetHrMax?: number;
+  targetCadenceMin?: number;
+  targetCadenceMax?: number;
+  referenceMetric?: { type: string; value: number };
+  equipment?: unknown;
+  eventId?: string;
 
   createdAt: Date;
   updatedAt: Date;
@@ -86,6 +115,38 @@ export type WorkoutMetadata = Pick<
   WorkoutRecord,
   'title' | 'description' | 'comment' | 'tags' | 'activityType'
 >;
+
+/** Extended updatable fields for planning-aware updates */
+export interface ActivityUpdateFields {
+  // Common editable fields (all statuses)
+  title?: string;
+  description?: string;
+  comment?: string;
+  tags?: string[];
+  activityType?: string;
+  // Planned/skipped only
+  date?: string;
+  plannedDurationSeconds?: number;
+  plannedDistanceMeters?: number;
+  segments?: unknown[];
+  targetPowerMin?: number;
+  targetPowerMax?: number;
+  targetHrMin?: number;
+  targetHrMax?: number;
+  targetCadenceMin?: number;
+  targetCadenceMax?: number;
+  targetSpeed?: number;
+  plannedTss?: number;
+  plannedIf?: number;
+  plannedTssOverride?: boolean;
+  plannedIfOverride?: boolean;
+  referenceMetric?: { type: string; value: number };
+  equipment?: { equipmentId: string; configurationId: string } | null;
+  eventId?: string;
+  // Completed only
+  rpe?: number;
+  movingTimeSeconds?: number;
+}
 
 /** A single time-series data point within a workout */
 export interface MetricDataPoint {

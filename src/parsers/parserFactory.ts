@@ -8,6 +8,9 @@ export interface WorkoutParser {
   /** Parse raw file buffer into structured workout data */
   parse(buffer: Buffer): Promise<ParsedWorkout>;
 
+  /** Light parse — extract only summary metadata (startTime, durationSeconds, activityType) without processing data points */
+  parseLightMetadata?(buffer: Buffer): Promise<{ startTime?: Date; durationSeconds?: number; activityType?: string }>;
+
   /** Check if this parser supports the given file extension or MIME type */
   supports(fileType: string): boolean;
 }

@@ -33,7 +33,19 @@ function createMockWorkoutRepository(): jest.Mocked<IWorkoutRepository> {
     findDuplicate: jest.fn(),
     findBySourceActivityId: jest.fn(),
     insertMetrics: jest.fn(),
+    deleteMetrics: jest.fn(),
+    materializeUpdate: jest.fn(),
+    clearMaterialization: jest.fn(),
     queryMetrics: jest.fn(),
+    findByDateRange: jest.fn(),
+    findPlannedCandidates: jest.fn(),
+    evaluateSkippedActivities: jest.fn(),
+    createTemplate: jest.fn(),
+    updateStatus: jest.fn(),
+    updateDateAndStatus: jest.fn(),
+    updatePowerMetrics: jest.fn(),
+    updateAvgSpeed: jest.fn(),
+    updateMaxPowers: jest.fn(),
   };
 }
 
@@ -110,12 +122,16 @@ const mockSettings: UserSettings = {
   driveStoragePath: 'WattLocker',
   driveInboxPath: 'WattLocker/Inbox',
   connectedSources: [],
+  timezone: 'America/Chicago',
   updatedAt: new Date(),
 };
 
 const mockCreatedWorkout: WorkoutRecord = {
   id: 'workout-abc-123',
   userId: 'user-1',
+  status: 'completed',
+  template: false,
+  date: '2024-03-15',
   activityType: 'ride',
   startTime: new Date('2024-03-15T08:00:00Z'),
   endTime: new Date('2024-03-15T09:30:00Z'),
