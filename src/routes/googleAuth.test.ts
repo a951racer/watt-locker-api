@@ -99,7 +99,7 @@ describe('Google Auth Routes', () => {
 
       expect(mockOAuth2Client.generateAuthUrl).toHaveBeenCalledWith({
         access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/drive.file'],
+        scope: ['https://www.googleapis.com/auth/drive'],
         state: 'user-123',
         prompt: 'consent',
       });
@@ -151,10 +151,8 @@ describe('Google Auth Routes', () => {
         .get('/api/auth/google/callback')
         .query({ code: 'auth-code-123', state: 'user-123' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.data.message).toBe('Google Drive connected successfully');
-      expect(res.body.data.connected).toBe(true);
-      expect(res.body.errors).toBeNull();
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=success');
     });
 
     it('should call getToken with the authorization code', async () => {
@@ -237,37 +235,35 @@ describe('Google Auth Routes', () => {
       ).toBeUndefined();
     });
 
-    it('should return 400 when code is missing', async () => {
+    it('should return 302 redirect with error when code is missing', async () => {
       const res = await request(app)
         .get('/api/auth/google/callback')
         .query({ state: 'user-123' });
 
-      expect(res.status).toBe(400);
-      expect(res.body.errors[0].code).toBe('VALIDATION_ERROR');
-      expect(res.body.errors[0].field).toBe('code');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=error');
     });
 
-    it('should return 400 when state is missing', async () => {
+    it('should return 302 redirect with error when state is missing', async () => {
       const res = await request(app)
         .get('/api/auth/google/callback')
         .query({ code: 'auth-code-123' });
 
-      expect(res.status).toBe(400);
-      expect(res.body.errors[0].code).toBe('VALIDATION_ERROR');
-      expect(res.body.errors[0].field).toBe('state');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=error');
     });
 
-    it('should return 401 when Google returns an error', async () => {
+    it('should return 302 redirect with error when Google returns an error', async () => {
       const res = await request(app)
         .get('/api/auth/google/callback')
         .query({ error: 'access_denied', state: 'user-123' });
 
-      expect(res.status).toBe(401);
-      expect(res.body.errors[0].code).toBe('AUTHENTICATION_ERROR');
-      expect(res.body.errors[0].message).toContain('access_denied');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=error');
+      expect(res.headers.location).toContain('access_denied');
     });
 
-    it('should return 401 when no refresh token is received', async () => {
+    it('should return 302 redirect with error when no refresh token is received', async () => {
       mockOAuth2Client.getToken.mockResolvedValue({
         tokens: { refresh_token: null },
       });
@@ -276,18 +272,20 @@ describe('Google Auth Routes', () => {
         .get('/api/auth/google/callback')
         .query({ code: 'auth-code-123', state: 'user-123' });
 
-      expect(res.status).toBe(401);
-      expect(res.body.errors[0].message).toContain('No refresh token received');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=error');
+      expect(res.headers.location).toContain('refresh%20token');
     });
 
-    it('should return 500 when token exchange fails', async () => {
+    it('should return 302 redirect with error when token exchange fails', async () => {
       mockOAuth2Client.getToken.mockRejectedValue(new Error('Token exchange failed'));
 
       const res = await request(app)
         .get('/api/auth/google/callback')
         .query({ code: 'invalid-code', state: 'user-123' });
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('driveAuth=error');
     });
   });
 
