@@ -16,6 +16,9 @@ describe('WorkoutService', () => {
   const mockWorkout: WorkoutRecord = {
     id: 'workout-1',
     userId,
+    status: 'completed',
+    template: false,
+    date: '2024-06-15',
     activityType: 'ride',
     startTime: new Date('2024-06-15T08:00:00Z'),
     endTime: new Date('2024-06-15T09:30:00Z'),
@@ -49,7 +52,19 @@ describe('WorkoutService', () => {
       findDuplicate: jest.fn(),
       findBySourceActivityId: jest.fn(),
       insertMetrics: jest.fn(),
+      deleteMetrics: jest.fn(),
+      materializeUpdate: jest.fn(),
+      clearMaterialization: jest.fn(),
       queryMetrics: jest.fn(),
+      findByDateRange: jest.fn(),
+      findPlannedCandidates: jest.fn(),
+      evaluateSkippedActivities: jest.fn(),
+      createTemplate: jest.fn(),
+      updateStatus: jest.fn(),
+      updateDateAndStatus: jest.fn(),
+      updatePowerMetrics: jest.fn(),
+      updateAvgSpeed: jest.fn(),
+      updateMaxPowers: jest.fn(),
     };
 
     mockFileStorageAdapter = {

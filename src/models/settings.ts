@@ -26,5 +26,8 @@ export interface UserSettings {
   // FTP history for TSS computation
   ftpHistory?: Array<{ effectiveDate: Date; ftpWatts: number }>;
 
+  // User timezone (IANA timezone identifier)
+  timezone: string;
+
   updatedAt: Date;
 }

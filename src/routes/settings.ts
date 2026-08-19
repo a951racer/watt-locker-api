@@ -93,6 +93,23 @@ function validateSettingsUpdate(body: unknown): void {
       validateConnectedSource(source);
     }
   }
+
+  if ('timezone' in payload) {
+    if (typeof payload.timezone !== 'string' || payload.timezone.trim() === '') {
+      throw new ValidationError('timezone must be a non-empty string', {
+        field: 'timezone',
+      });
+    }
+    // Validate against known IANA timezone identifiers
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: payload.timezone });
+    } catch {
+      throw new ValidationError(
+        `Invalid timezone identifier: "${payload.timezone}". Must be a valid IANA timezone (e.g., America/Chicago, Europe/London).`,
+        { field: 'timezone' },
+      );
+    }
+  }
 }
 
 /**

@@ -43,16 +43,32 @@ function createMockWorkoutRepository(): jest.Mocked<IWorkoutRepository> {
     findDuplicate: jest.fn(),
     findBySourceActivityId: jest.fn(),
     insertMetrics: jest.fn(),
+    deleteMetrics: jest.fn(),
+    materializeUpdate: jest.fn(),
+    clearMaterialization: jest.fn(),
     queryMetrics: jest.fn(),
+    findByDateRange: jest.fn(),
+    findPlannedCandidates: jest.fn(),
+    evaluateSkippedActivities: jest.fn(),
+    createTemplate: jest.fn(),
+    updateStatus: jest.fn(),
+    updateDateAndStatus: jest.fn(),
+    updatePowerMetrics: jest.fn(),
+    updateAvgSpeed: jest.fn(),
+    updateMaxPowers: jest.fn(),
   };
 }
 
 /** Create a mock UploadService */
 function createMockUploadService(): jest.Mocked<IUploadService> {
   return {
+    uploadFile: jest.fn(),
     uploadSingle: jest.fn(),
     uploadBulk: jest.fn(),
     ingestFromInbox: jest.fn(),
+    intakeUpload: jest.fn(),
+    materializeActivity: jest.fn(),
+    clearActivityMaterialization: jest.fn(),
   };
 }
 
@@ -70,6 +86,7 @@ const mockSettings: UserSettings = {
   driveStoragePath: 'WattLocker',
   driveInboxPath: 'WattLocker/Inbox',
   connectedSources: [],
+  timezone: 'America/Chicago',
   updatedAt: new Date('2024-06-01'),
 };
 
@@ -328,6 +345,9 @@ describe('StravaSyncService', () => {
       const existingWorkout: WorkoutRecord = {
         id: 'existing-workout-id',
         userId: '456',
+        status: 'completed',
+        template: false,
+        date: '2024-01-15',
         activityType: 'ride',
         startTime: new Date('2024-01-15T10:00:00Z'),
         endTime: new Date('2024-01-15T11:00:00Z'),
@@ -780,6 +800,9 @@ describe('StravaSyncService', () => {
       const existingWorkout: WorkoutRecord = {
         id: 'existing-id',
         userId: 'user-123',
+        status: 'completed',
+        template: false,
+        date: '2024-01-16',
         activityType: 'ride',
         startTime: new Date('2024-01-16T18:00:00Z'),
         endTime: new Date('2024-01-16T18:30:00Z'),
@@ -926,6 +949,9 @@ describe('StravaSyncService', () => {
       mockWorkoutRepository.findBySourceActivityId.mockResolvedValue({
         id: 'existing-id',
         userId: 'user-123',
+        status: 'completed',
+        template: false,
+        date: '2024-01-15',
         activityType: 'ride',
         startTime: new Date(),
         endTime: new Date(),

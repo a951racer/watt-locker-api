@@ -21,9 +21,13 @@ function createMockWorkoutService(): jest.Mocked<IWorkoutService> {
 /** Create a mock UploadService */
 function createMockUploadService(): jest.Mocked<IUploadService> {
   return {
+    uploadFile: jest.fn(),
     uploadSingle: jest.fn(),
     uploadBulk: jest.fn(),
     ingestFromInbox: jest.fn(),
+    intakeUpload: jest.fn(),
+    materializeActivity: jest.fn(),
+    clearActivityMaterialization: jest.fn(),
   };
 }
 
@@ -65,6 +69,9 @@ function sampleWorkout(overrides?: Partial<WorkoutRecord>): WorkoutRecord {
   return {
     id: 'workout-1',
     userId: 'user-123',
+    status: 'completed',
+    template: false,
+    date: '2024-01-15',
     activityType: 'ride',
     startTime: new Date('2024-01-15T08:00:00Z'),
     endTime: new Date('2024-01-15T09:30:00Z'),
@@ -77,7 +84,7 @@ function sampleWorkout(overrides?: Partial<WorkoutRecord>): WorkoutRecord {
     createdAt: new Date('2024-01-15T10:00:00Z'),
     updatedAt: new Date('2024-01-15T10:00:00Z'),
     ...overrides,
-  };
+  } as WorkoutRecord;
 }
 
 describe('Workouts Routes', () => {

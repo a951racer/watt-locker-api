@@ -100,6 +100,53 @@ export class FitFileParser implements WorkoutParser {
   }
 
   /**
+   * Light parse — extract only summary-level metadata without processing individual records.
+   * This avoids the expensive extractDataPoints() step.
+   */
+  async parseLightMetadata(buffer: Buffer): Promise<{ startTime?: Date; durationSeconds?: number; activityType?: string }> {
+    const fitParser = new FitParser({
+      force: true,
+      speedUnit: 'm/s',
+      lengthUnit: 'm',
+      temperatureUnit: 'celsius',
+      elapsedRecordField: true,
+      mode: 'list',
+    });
+
+    let parsedFit: FitData;
+    try {
+      parsedFit = (await fitParser.parseAsync(buffer as unknown as ArrayBuffer)) as FitData;
+    } catch {
+      return {};
+    }
+
+    if (!parsedFit) return {};
+
+    const sessions = parsedFit.sessions ?? [];
+    const firstSession = sessions[0];
+
+    let startTime: Date | undefined;
+    let durationSeconds: number | undefined;
+    let activityType: string | undefined;
+
+    if (firstSession) {
+      if (firstSession.start_time) {
+        startTime = new Date(firstSession.start_time);
+      } else if (firstSession.timestamp) {
+        startTime = new Date(firstSession.timestamp);
+      }
+      if (firstSession.total_timer_time != null) {
+        durationSeconds = Math.round(firstSession.total_timer_time);
+      } else if (firstSession.total_elapsed_time != null) {
+        durationSeconds = Math.round(firstSession.total_elapsed_time);
+      }
+      activityType = this.mapSportToActivityType(firstSession.sport, firstSession.sub_sport);
+    }
+
+    return { startTime, durationSeconds, activityType };
+  }
+
+  /**
    * Extract MetricDataPoint[] from FIT record messages.
    */
   private extractDataPoints(records: FitRecord[]): MetricDataPoint[] {
