@@ -3,7 +3,6 @@ import { google } from 'googleapis';
 import { ISettingsService } from '../services/settingsService';
 import { config } from '../config/env';
 import { successResponse } from '../utils/response';
-import { ValidationError, AuthenticationError } from '../utils/errors';
 import { ConnectedSource } from '../models/settings';
 
 /** Google Drive OAuth scopes required for file operations */
@@ -82,21 +81,23 @@ export function createGoogleAuthRouter(
    * Handles the OAuth callback from Google.
    * Exchanges the authorization code for tokens and stores the encrypted
    * refresh token in user settings via the settings service.
+   * Redirects back to the frontend Settings page with success/error status.
    */
-  router.get('/callback', async (req: Request, res: Response, next: NextFunction) => {
+  router.get('/callback', async (req: Request, res: Response, _next: NextFunction) => {
     try {
       const { code, state, error } = req.query;
+      const frontendUrl = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
       if (error) {
-        throw new AuthenticationError(`Google OAuth error: ${String(error)}`);
+        return res.redirect(`${frontendUrl}/admin?driveAuth=error&reason=${encodeURIComponent(String(error))}`);
       }
 
       if (!code || typeof code !== 'string') {
-        throw new ValidationError('Authorization code is required', { field: 'code' });
+        return res.redirect(`${frontendUrl}/admin?driveAuth=error&reason=${encodeURIComponent('Authorization code missing')}`);
       }
 
       if (!state || typeof state !== 'string') {
-        throw new ValidationError('State parameter is required', { field: 'state' });
+        return res.redirect(`${frontendUrl}/admin?driveAuth=error&reason=${encodeURIComponent('State parameter missing')}`);
       }
 
       const userId = state;
@@ -105,9 +106,7 @@ export function createGoogleAuthRouter(
       const { tokens } = await oauth2Client.getToken(code);
 
       if (!tokens.refresh_token) {
-        throw new AuthenticationError(
-          'No refresh token received. Please revoke access and try again.',
-        );
+        return res.redirect(`${frontendUrl}/admin?driveAuth=error&reason=${encodeURIComponent('No refresh token received. Please revoke access and try again.')}`);
       }
 
       const encryptedToken = encryptToken(tokens.refresh_token);
@@ -132,14 +131,11 @@ export function createGoogleAuthRouter(
         connectedSources: [...filteredSources, googleDriveSource],
       });
 
-      res.status(200).json(
-        successResponse({
-          message: 'Google Drive connected successfully',
-          connected: true,
-        }),
-      );
+      res.redirect(`${frontendUrl}/admin?driveAuth=success`);
     } catch (err) {
-      next(err);
+      const frontendUrl = process.env.CORS_ORIGIN || 'http://localhost:5173';
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.redirect(`${frontendUrl}/admin?driveAuth=error&reason=${encodeURIComponent(message)}`);
     }
   });
 
