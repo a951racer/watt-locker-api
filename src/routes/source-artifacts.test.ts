@@ -141,6 +141,67 @@ describe('PLAN-024: Source Artifact API', () => {
 
       expect(res.status).toBe(404);
     });
+
+    it('should NOT include fileContent in the response (PLAN-041)', async () => {
+      const activityId = await createWorkout('user-1');
+      await createArtifact({
+        activityId,
+        role: 'primary',
+        materialized: true,
+        driveFileId: 'local',
+        fileContent: Buffer.from('fake-fit-binary-data'),
+      } as any);
+
+      const res = await request(app).get(`/api/workouts/${activityId}/sources`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0]).not.toHaveProperty('fileContent');
+    });
+
+    it('should include Drive link information for Drive-backed artifacts (PLAN-041)', async () => {
+      const activityId = await createWorkout('user-1');
+      await createArtifact({
+        activityId,
+        role: 'primary',
+        materialized: true,
+        driveFileId: 'drive-abc-123',
+        driveWebViewLink: 'https://drive.google.com/file/d/drive-abc-123/view',
+      });
+
+      const res = await request(app).get(`/api/workouts/${activityId}/sources`);
+
+      expect(res.status).toBe(200);
+      const artifact = res.body.data[0];
+      expect(artifact.driveFileId).toBe('drive-abc-123');
+      expect(artifact.driveWebViewLink).toBe('https://drive.google.com/file/d/drive-abc-123/view');
+      expect(artifact.originalFileName).toBe('workout.fit');
+      expect(artifact.format).toBe('fit');
+      expect(artifact.source).toBe('manual');
+      expect(artifact.role).toBe('primary');
+      expect(artifact.importedAt).toBeDefined();
+    });
+
+    it('should represent fallback artifact without exposing binary content (PLAN-041)', async () => {
+      const activityId = await createWorkout('user-1');
+      await createArtifact({
+        activityId,
+        role: 'primary',
+        materialized: true,
+        driveFileId: 'local',
+        fileContent: Buffer.from('retained-source-binary'),
+      } as any);
+
+      const res = await request(app).get(`/api/workouts/${activityId}/sources`);
+
+      expect(res.status).toBe(200);
+      const artifact = res.body.data[0];
+      expect(artifact.driveFileId).toBe('local');
+      expect(artifact.driveWebViewLink).toBeUndefined();
+      expect(artifact).not.toHaveProperty('fileContent');
+      expect(artifact.originalFileName).toBe('workout.fit');
+      expect(artifact.format).toBe('fit');
+    });
   });
 
   describe('PUT /api/source-artifacts/:artifactId/promote', () => {

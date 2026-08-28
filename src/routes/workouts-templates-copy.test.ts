@@ -272,16 +272,16 @@ describe('PLAN-017: POST /api/workouts/templates/:id/copy — Copy template', ()
       const templateId = await createTemplate();
       const copyRes = await request(app).post(`/api/workouts/templates/${templateId}/copy`).send({ date: '2027-09-15' });
       const calRes = await request(app).get('/api/workouts/calendar?dateFrom=2027-09-15&dateTo=2027-09-15');
-      expect(calRes.body.data).toHaveLength(1);
-      expect(calRes.body.data[0].id).toBe(copyRes.body.data.id);
-      expect(calRes.body.data[0].status).toBe('planned');
+      expect(calRes.body.data.activities).toHaveLength(1);
+      expect(calRes.body.data.activities[0].id).toBe(copyRes.body.data.id);
+      expect(calRes.body.data.activities[0].status).toBe('planned');
     });
 
     it('should NOT show the source template in calendar', async () => {
       const templateId = await createTemplate();
       await request(app).post(`/api/workouts/templates/${templateId}/copy`).send({ date: '2027-09-15' });
       const calRes = await request(app).get('/api/workouts/calendar?dateFrom=2027-09-15&dateTo=2027-09-15');
-      const ids = calRes.body.data.map((a: any) => a.id);
+      const ids = calRes.body.data.activities.map((a: any) => a.id);
       expect(ids).not.toContain(templateId);
     });
   });

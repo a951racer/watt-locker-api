@@ -217,7 +217,7 @@ describe('PLAN-013: evaluateSkippedActivities — Automatic skip evaluation', ()
       const dateTo = getTodayInTimezone(TEST_TIMEZONE);
       const res = await request(app).get(`/api/workouts/calendar?dateFrom=${dateFrom}&dateTo=${dateTo}`);
       expect(res.status).toBe(200);
-      const item = res.body.data.find((a: any) => a.title === 'Overdue Via Calendar');
+      const item = res.body.data.activities.find((a: any) => a.title === 'Overdue Via Calendar');
       expect(item).toBeDefined();
       expect(item.status).toBe('skipped');
     });
@@ -246,7 +246,7 @@ describe('PLAN-013: evaluateSkippedActivities — Automatic skip evaluation', ()
       const dateFrom = getDateOffsetInTimezone(TEST_TIMEZONE, -1);
       const dateTo = getDateOffsetInTimezone(TEST_TIMEZONE, 1);
       const res = await request(app).get(`/api/workouts/calendar?dateFrom=${dateFrom}&dateTo=${dateTo}`);
-      const item = res.body.data.find((a: any) => a.title === 'Today Planned');
+      const item = res.body.data.activities.find((a: any) => a.title === 'Today Planned');
       expect(item.status).toBe('planned');
     });
 

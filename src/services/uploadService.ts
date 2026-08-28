@@ -252,6 +252,7 @@ export class UploadService implements IUploadService {
           distanceMeters: 0,
         },
         matchedExisting: true,
+        archival: intake.driveArchivalFailed ? 'fallback' : 'drive',
       };
     }
 
@@ -288,6 +289,7 @@ export class UploadService implements IUploadService {
       driveFileId: intake.driveFileId,
       summary: this.buildSummary(parsedWorkout),
       matchedExisting: false,
+      archival: intake.driveArchivalFailed ? 'fallback' : 'drive',
     };
   }
 
@@ -409,12 +411,110 @@ export class UploadService implements IUploadService {
     const fileExtension = this.extractExtension(fileName);
     const parser = this.parserFactory.getParser(fileExtension);
 
-    // 2. Store file in Drive FIRST (before SourceArtifact creation)
+    // 2. Light parse FIRST — needed for duplicate detection before any archival side effect
+    let startTime: Date | undefined;
+    let durationSeconds: number | undefined;
+    let activityType: string | undefined;
+
+    try {
+      if (parser.parseLightMetadata) {
+        const meta = await parser.parseLightMetadata(file);
+        startTime = meta.startTime;
+        durationSeconds = meta.durationSeconds;
+        activityType = meta.activityType;
+      } else {
+        const parsed = await parser.parse(file);
+        startTime = parsed.summary.startTime;
+        durationSeconds = parsed.summary.durationSeconds;
+        activityType = parsed.summary.activityType;
+      }
+    } catch {
+      this.logger.warn('Light parse failed during intake', { userId, fileName });
+    }
+
+    // 3. Duplicate detection BEFORE archival — no Drive side effect for duplicates
+    if (startTime && durationSeconds != null) {
+      const existing = await this.sourceArtifactRepository.findDuplicateCandidate(userId, startTime, durationSeconds);
+      if (existing) {
+        // Distinguish an ACTIVE duplicate from an ORPHANED source (PLAN-050).
+        // An active duplicate's activityId still points to a live WorkoutRecord —
+        // re-importing must short-circuit (no new workout/artifact/Drive upload).
+        // An orphaned source (activityId=null, or pointing at a workout that was
+        // deleted) must be recoverable: reuse the existing artifact and re-import.
+        const liveActivity = existing.activityId
+          ? await this.workoutRepository.findById(existing.activityId)
+          : null;
+        const isActiveDuplicate = !!liveActivity && liveActivity.userId === userId;
+
+        if (isActiveDuplicate) {
+          this.logger.info('Duplicate source file detected during intake (active workout exists)', {
+            userId, fileName, existingArtifactId: existing.id, existingActivityId: existing.activityId,
+          });
+          return {
+            artifactId: existing.id,
+            driveFileId: existing.driveFileId,
+            originalFileName: fileName,
+            startTime,
+            durationSeconds,
+            activityType,
+            duplicate: true,
+            matched: false,
+            activityId: existing.activityId,
+            role: 'secondary',
+            materialized: existing.materialized,
+          };
+        }
+
+        // Orphaned source — the workout was deleted (or never associated).
+        // Reuse the existing SourceArtifact (preserving provenance, Drive
+        // reference, filename, importedAt, format, and any local fileContent),
+        // reset it to an unmaterialized primary, and let the caller re-import
+        // by matching a planned Activity or creating a new one. No new artifact,
+        // no Drive re-upload.
+        this.logger.info('Orphaned source file re-import detected during intake (no live workout) — recovering', {
+          userId, fileName, existingArtifactId: existing.id, staleActivityId: existing.activityId,
+        });
+        await this.sourceArtifactRepository.update(existing.id, {
+          activityId: null,
+          role: 'primary',
+          materialized: false,
+        });
+
+        // Re-match against planned/skipped activities for the source's date.
+        let recoveredMatch = false;
+        let recoveredActivityId: string | null = null;
+        const settings = await this.settingsService.getSettings(userId);
+        const candidateDate = startTime.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+        const candidates = await this.workoutRepository.findPlannedCandidates(userId, candidateDate, activityType);
+        if (candidates.length > 0) {
+          recoveredActivityId = candidates[0].id;
+          recoveredMatch = true;
+          await this.sourceArtifactRepository.update(existing.id, { activityId: candidates[0].id });
+        }
+
+        return {
+          artifactId: existing.id,
+          driveFileId: existing.driveFileId,
+          originalFileName: fileName,
+          startTime,
+          durationSeconds,
+          activityType,
+          duplicate: false,
+          matched: recoveredMatch,
+          activityId: recoveredActivityId,
+          role: 'primary',
+          materialized: false,
+          driveArchivalFailed: existing.driveFileId === 'local',
+        };
+      }
+    }
+
+    // 4. Archive to Drive (only for genuinely new source files)
     const mimeType = this.getMimeType(fileExtension);
     const fileMetadata: FileMetadata = {
       fileName,
       mimeType,
-      workoutDate: new Date(), // Placeholder — real date from light parse
+      workoutDate: startTime ?? new Date(),
       dataSource: options?.dataSource ?? 'manual',
     };
 
@@ -423,11 +523,12 @@ export class UploadService implements IUploadService {
 
     let storageRef: { fileId: string; webViewLink?: string };
     let fileContentFallback: Buffer | undefined;
+    let driveArchivalFailed = false;
     try {
       storageRef = await adapter.store(file, fileMetadata);
       this.logger.info('Drive storage succeeded during intake', { userId, fileName, fileId: storageRef.fileId });
     } catch (err) {
-      // Drive not configured or failed — store binary in MongoDB as fallback
+      driveArchivalFailed = true;
       const driveConfigured = !!userDriveAdapter;
       if (driveConfigured) {
         this.logger.warn('Drive storage failed; using MongoDB source fallback', {
@@ -440,54 +541,7 @@ export class UploadService implements IUploadService {
       fileContentFallback = file;
     }
 
-    // 3. Light parse — extract only startTime, durationSeconds, activityType
-    let startTime: Date | undefined;
-    let durationSeconds: number | undefined;
-    let activityType: string | undefined;
-
-    try {
-      if (parser.parseLightMetadata) {
-        const meta = await parser.parseLightMetadata(file);
-        startTime = meta.startTime;
-        durationSeconds = meta.durationSeconds;
-        activityType = meta.activityType;
-      } else {
-        // Fallback: full parse but only use summary (for parsers without light method)
-        const parsed = await parser.parse(file);
-        startTime = parsed.summary.startTime;
-        durationSeconds = parsed.summary.durationSeconds;
-        activityType = parsed.summary.activityType;
-      }
-    } catch {
-      // Light parse failure: proceed without metadata (file is already stored)
-      this.logger.warn('Light parse failed during intake', { userId, fileName });
-    }
-
-    // 4. PLAN-022: Duplicate detection — check BEFORE creating SourceArtifact
-    if (startTime && durationSeconds != null) {
-      const existing = await this.sourceArtifactRepository.findDuplicateCandidate(userId, startTime, durationSeconds);
-      if (existing) {
-        // Already imported — do not create another artifact
-        this.logger.info('Duplicate source file detected during intake', {
-          userId, fileName, existingArtifactId: existing.id, existingActivityId: existing.activityId,
-        });
-        return {
-          artifactId: existing.id,
-          driveFileId: existing.driveFileId,
-          originalFileName: fileName,
-          startTime,
-          durationSeconds,
-          activityType,
-          duplicate: true,
-          matched: false,
-          activityId: existing.activityId,
-          role: 'secondary',
-          materialized: existing.materialized,
-        };
-      }
-    }
-
-    // 5. Create SourceArtifact (only for genuinely new source files)
+    // 5. Create SourceArtifact
     const artifact = await this.sourceArtifactRepository.create({
       userId,
       activityId: null,
@@ -505,19 +559,15 @@ export class UploadService implements IUploadService {
       activityType,
     });
 
-    // 6. PLAN-023: Activity matching (only for non-duplicates with startTime)
+    // 6. Planned/skipped activity matching
     let isMatched = false;
     let finalActivityId: string | null = null;
     if (startTime) {
-      // Derive candidateDate from startTime in user's timezone
       const settings = await this.settingsService.getSettings(userId);
       const candidateDate = startTime.toLocaleDateString('en-CA', { timeZone: settings.timezone });
-
-      // Query planned Activities for that date and activityType
       const candidates = await this.workoutRepository.findPlannedCandidates(userId, candidateDate, activityType);
 
       if (candidates.length > 0) {
-        // Single or multiple: pick first by creation order (sorted by createdAt ASC in repository)
         const matched = candidates[0];
         finalActivityId = matched.id;
         isMatched = true;
@@ -539,6 +589,7 @@ export class UploadService implements IUploadService {
       activityId: finalActivityId,
       role: 'primary' as const,
       materialized: false,
+      driveArchivalFailed,
     };
   }
 
@@ -682,7 +733,8 @@ export class UploadService implements IUploadService {
     // 2. Compute all metrics
     const avgPower = this.computeAverage(parsedWorkout.dataPoints, 'powerWatts');
     const maxPower = this.computeMax(parsedWorkout.dataPoints, 'powerWatts');
-    const normalizedPower = parsedWorkout.summary.normalizedPowerWatts ?? this.computeNormalizedPower(parsedWorkout.dataPoints);
+    // PLAN-044: prefer stream-computed NP; fall back to device NP only when unavailable
+    const normalizedPower = this.selectNormalizedPower(parsedWorkout);
 
     const settings = await this.settingsService.getSettings(userId);
     const ftpUsed = lookupFtp(parsedWorkout.summary.startTime, settings.ftpHistory, parsedWorkout.summary.ftpWatts);
@@ -696,7 +748,7 @@ export class UploadService implements IUploadService {
     const aerobicDecoupling = this.computeAerobicDecoupling(parsedWorkout.dataPoints);
     const avgHr = this.computeAverage(parsedWorkout.dataPoints, 'heartRateBpm');
     const maxHr = this.computeMax(parsedWorkout.dataPoints, 'heartRateBpm');
-    const avgCadence = this.computeAverage(parsedWorkout.dataPoints, 'cadenceRpm');
+    const avgCadence = this.computeAvgCadence(parsedWorkout.dataPoints);
     const avgSpeed = this.computeAvgSpeed(parsedWorkout.summary.distanceMeters, parsedWorkout.summary.movingTimeSeconds, parsedWorkout.summary.durationSeconds);
 
     const powerValues = parsedWorkout.dataPoints
@@ -938,7 +990,8 @@ export class UploadService implements IUploadService {
     // Extract averages/peaks from data points if available
     const avgPower = this.computeAverage(parsed.dataPoints, 'powerWatts');
     const maxPower = this.computeMax(parsed.dataPoints, 'powerWatts');
-    const normalizedPower = parsed.summary.normalizedPowerWatts ?? this.computeNormalizedPower(parsed.dataPoints);
+    // PLAN-044: prefer stream-computed NP; fall back to device NP only when unavailable
+    const normalizedPower = this.selectNormalizedPower(parsed);
     this.logger.info('NP computation', {
       totalDataPoints: parsed.dataPoints.length,
       pointsWithPower: parsed.dataPoints.filter(dp => dp.powerWatts != null).length,
@@ -963,7 +1016,7 @@ export class UploadService implements IUploadService {
     const aerobicDecoupling = this.computeAerobicDecoupling(parsed.dataPoints);
     const avgHr = this.computeAverage(parsed.dataPoints, 'heartRateBpm');
     const maxHr = this.computeMax(parsed.dataPoints, 'heartRateBpm');
-    const avgCadence = this.computeAverage(parsed.dataPoints, 'cadenceRpm');
+    const avgCadence = this.computeAvgCadence(parsed.dataPoints);
     const avgSpeed = this.computeAvgSpeed(parsed.summary.distanceMeters, parsed.summary.movingTimeSeconds, parsed.summary.durationSeconds);
 
     // Compute max powers (power curve)
@@ -1014,6 +1067,22 @@ export class UploadService implements IUploadService {
     const values = dataPoints
       .map((dp) => dp[field] as number | undefined)
       .filter((v): v is number => v !== undefined);
+
+    if (values.length === 0) return undefined;
+    return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+  }
+
+  /**
+   * Compute average cadence excluding zero-cadence samples (coasting/stopped).
+   * Industry convention: "average cadence" means average active pedaling cadence.
+   * Returns undefined if no non-zero cadence samples exist.
+   */
+  private computeAvgCadence(
+    dataPoints: ParsedWorkout['dataPoints'],
+  ): number | undefined {
+    const values = dataPoints
+      .map((dp) => dp.cadenceRpm)
+      .filter((v): v is number => v !== undefined && v > 0);
 
     if (values.length === 0) return undefined;
     return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
@@ -1084,6 +1153,18 @@ export class UploadService implements IUploadService {
     const np = Math.pow(mean4th, 0.25);
 
     return Math.round(np);
+  }
+
+  /**
+   * PLAN-044: Select the authoritative Normalized Power for an actual workout.
+   * Prefers Watt Locker's own stream-computed NP whenever sufficient power data
+   * exists. Falls back to the device/session-reported NP only when the stream
+   * computation is unavailable (e.g., fewer than 30 power samples).
+   * Returns undefined when neither source can produce a value.
+   */
+  private selectNormalizedPower(parsed: ParsedWorkout): number | undefined {
+    const streamComputedNP = this.computeNormalizedPower(parsed.dataPoints);
+    return streamComputedNP ?? parsed.summary.normalizedPowerWatts;
   }
 
   /**

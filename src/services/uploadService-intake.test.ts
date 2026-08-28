@@ -218,11 +218,28 @@ describe('PLAN-021: intakeUpload — Lightweight intake', () => {
   });
 
   describe('9. Drive failure', () => {
-    it('should not create artifact if Drive upload fails', async () => {
+    it('should create artifact with MongoDB fallback when Drive upload fails (PLAN-037D/PLAN-040)', async () => {
+      const sourceBuffer = Buffer.from('ride-source-data');
       (mockDriveAdapter.store as jest.Mock).mockRejectedValueOnce(new Error('Drive unavailable'));
-      await expect(service.intakeUpload(Buffer.from('data'), 'ride.fit', 'user-1'))
-        .rejects.toThrow('Drive unavailable');
-      expect(mockSourceArtifactRepository.create).not.toHaveBeenCalled();
+
+      const result = await service.intakeUpload(sourceBuffer, 'ride.fit', 'user-1');
+
+      // Ingestion succeeds — does NOT reject
+      expect(result.duplicate).toBe(false);
+      expect(result.artifactId).toBeDefined();
+
+      // SourceArtifact created with fallback representation
+      expect(mockSourceArtifactRepository.create).toHaveBeenCalledTimes(1);
+      expect(artifactStore).toHaveLength(1);
+      expect(artifactStore[0].driveFileId).toBe('local');
+
+      // Original source binary retained in MongoDB
+      expect(artifactStore[0].fileContent).toBeDefined();
+      expect(artifactStore[0].fileContent!.toString()).toBe('ride-source-data');
+
+      // Result indicates archival fallback
+      expect(result.driveArchivalFailed).toBe(true);
+      expect(result.driveFileId).toBe('local');
     });
   });
 

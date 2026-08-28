@@ -1272,7 +1272,10 @@ export function createWorkoutsRouter(
       }
 
       const artifacts = await sourceArtifactRepository.findByActivityId(userId, activityId);
-      res.status(200).json(successResponse(artifacts));
+
+      // Strip fileContent (binary) from response — only expose provenance metadata
+      const summaries = artifacts.map(({ fileContent, ...rest }) => rest);
+      res.status(200).json(successResponse(summaries));
     } catch (err) {
       next(err);
     }
@@ -1286,14 +1289,19 @@ export function createWorkoutsRouter(
   router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = req.params.id as string;
+      const userId = req.user!.userId;
       const removeFromDrive = req.query.removeFromDrive === 'true';
 
-      // Disassociate all source artifacts from this Activity before deletion
-      if (sourceArtifactRepository) {
-        await sourceArtifactRepository.disassociateByActivityId(id);
-      }
+      // Delete the workout first — this enforces user ownership (throws
+      // NotFoundError if the workout does not belong to the caller), so an
+      // unauthorized caller can never reach the disassociation step.
+      await workoutService.deleteWorkout(id, userId, { removeFromDrive });
 
-      await workoutService.deleteWorkout(id, req.user!.userId, { removeFromDrive });
+      // Disassociate the caller's own source artifacts from the deleted Activity.
+      // User-scoped so it can never touch another user's artifacts (PLAN-051).
+      if (sourceArtifactRepository) {
+        await sourceArtifactRepository.disassociateByActivityId(userId, id);
+      }
       res.status(200).json(successResponse({ deleted: true }));
     } catch (err) {
       next(err);

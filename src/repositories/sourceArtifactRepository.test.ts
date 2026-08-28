@@ -201,4 +201,50 @@ describe('PLAN-019: MongoSourceArtifactRepository', () => {
       expect(second.id).toBeDefined();
     });
   });
+
+  describe('PLAN-051: user isolation', () => {
+    it('findDuplicateCandidate must not return another user artifact with the same signature', async () => {
+      await repo.create({
+        ...baseArtifact,
+        userId: 'user-A',
+        activityId: 'act-A',
+        startTime: new Date('2027-04-01T07:00:00Z'),
+        durationSeconds: 3600,
+      });
+
+      // User-B searches for the same (startTime, duration) signature
+      const found = await repo.findDuplicateCandidate('user-B', new Date('2027-04-01T07:00:00Z'), 3600);
+      expect(found).toBeNull();
+
+      // Same-user lookup still finds it
+      const foundOwn = await repo.findDuplicateCandidate('user-A', new Date('2027-04-01T07:00:00Z'), 3600);
+      expect(foundOwn).not.toBeNull();
+      expect(foundOwn!.userId).toBe('user-A');
+    });
+
+    it('disassociateByActivityId must not touch another user artifacts sharing an activityId', async () => {
+      // Two users each hold a secondary artifact under the same activityId string.
+      // (The partial-unique index only constrains role='primary', so secondaries
+      // can legitimately share an activityId. This isolates the userId-scoping of
+      // disassociateByActivityId from the primary-uniqueness constraint.)
+      const artA = await repo.create({ ...baseArtifact, userId: 'user-A', activityId: 'shared-id', role: 'secondary', originalFileName: 'a.fit' });
+      const artB = await repo.create({ ...baseArtifact, userId: 'user-B', activityId: 'shared-id', role: 'secondary', originalFileName: 'b.fit' });
+
+      // User-A disassociates their own — must only affect user-A's artifact
+      const modified = await repo.disassociateByActivityId('user-A', 'shared-id');
+      expect(modified).toBe(1);
+
+      const afterA = await repo.findById(artA.id);
+      expect(afterA!.activityId).toBeNull();
+
+      const afterB = await repo.findById(artB.id);
+      expect(afterB!.activityId).toBe('shared-id'); // untouched
+    });
+
+    it('disassociateByActivityId with a foreign userId modifies nothing', async () => {
+      await repo.create({ ...baseArtifact, userId: 'user-A', activityId: 'act-A', role: 'primary' });
+      const modified = await repo.disassociateByActivityId('user-B', 'act-A');
+      expect(modified).toBe(0);
+    });
+  });
 });

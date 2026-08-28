@@ -81,7 +81,7 @@ export interface ISourceArtifactRepository {
   findUnassociated(userId: string): Promise<SourceArtifactRecord[]>;
   findDuplicateCandidate(userId: string, startTime: Date, durationSeconds: number): Promise<SourceArtifactRecord | null>;
   update(id: string, updates: SourceArtifactUpdate): Promise<SourceArtifactRecord>;
-  disassociateByActivityId(activityId: string): Promise<number>;
+  disassociateByActivityId(userId: string, activityId: string): Promise<number>;
 }
 
 /** MongoDB implementation of the source artifact repository */
@@ -195,9 +195,12 @@ export class MongoSourceArtifactRepository implements ISourceArtifactRepository 
     return docs.map(doc => this.toRecord(doc as unknown as SourceArtifactDocument));
   }
 
-  async disassociateByActivityId(activityId: string): Promise<number> {
+  async disassociateByActivityId(userId: string, activityId: string): Promise<number> {
+    // User-scoped: only the owning user's artifacts for this Activity are
+    // disassociated. A caller supplying another user's activityId can never
+    // mutate that user's artifacts (PLAN-051 isolation).
     const result = await this.artifacts.updateMany(
-      { activityId },
+      { userId, activityId },
       { $set: { activityId: null, role: 'secondary' as ArtifactRole, updatedAt: new Date() } },
     );
     return result.modifiedCount;

@@ -30,10 +30,13 @@ const mockDriveAdapter: FileStorageAdapter = {
   removeFromFolder: jest.fn(),
 };
 
+// In-memory workout store so findById reflects live vs deleted workouts (PLAN-050)
+let workoutStore: any[] = [];
 const mockWorkoutRepository: Partial<IWorkoutRepository> = {
   create: jest.fn(),
   insertMetrics: jest.fn(),
   findPlannedCandidates: jest.fn().mockResolvedValue([]),
+  findById: jest.fn().mockImplementation(async (id: string) => workoutStore.find((w) => w.id === id) ?? null),
 };
 
 const mockSettingsService: Partial<ISettingsService> = {
@@ -91,6 +94,7 @@ describe('PLAN-022: Duplicate detection via SourceArtifact', () => {
     artifactStore = [];
     artifactIdCounter = 0;
     driveCounter = 0;
+    workoutStore = [];
     service = new UploadService(
       mockParserFactory,
       mockWorkoutRepository as IWorkoutRepository,
@@ -118,19 +122,31 @@ describe('PLAN-022: Duplicate detection via SourceArtifact', () => {
       expect(first.duplicate).toBe(false);
       expect(first.role).toBe('primary');
 
+      // Simulate the rest of the pipeline: the artifact is associated with a
+      // LIVE workout (as uploadWithMatching would do). Only then is a re-upload
+      // an ACTIVE duplicate (PLAN-050).
+      workoutStore.push({ id: 'workout-live', userId: 'user-1', status: 'completed', template: false });
+      const idx = artifactStore.findIndex((a) => a.id === first.artifactId);
+      artifactStore[idx].activityId = 'workout-live';
+
       // Second upload with same startTime/durationSeconds
       const second = await service.intakeUpload(Buffer.from('data2'), 'ride2.fit', 'user-1');
       expect(second.duplicate).toBe(true);
       expect(second.role).toBe('secondary');
     });
 
-    it('should retain the duplicate artifact', async () => {
+    it('should NOT create a second artifact for a duplicate (PLAN-040)', async () => {
       await service.intakeUpload(Buffer.from('data1'), 'ride1.fit', 'user-1');
       await service.intakeUpload(Buffer.from('data2'), 'ride2.fit', 'user-1');
-      expect(artifactStore).toHaveLength(2);
+      // Duplicate detection short-circuits before artifact creation
+      expect(artifactStore).toHaveLength(1);
+      // No Drive archival attempt for the duplicate
+      expect(mockDriveAdapter.store).toHaveBeenCalledTimes(1);
     });
 
     it('should set duplicate activityId to existing artifact activityId', async () => {
+      // The referenced workout must be LIVE for this to be an active duplicate (PLAN-050)
+      workoutStore.push({ id: 'activity-existing', userId: 'user-1', status: 'completed', template: false });
       // Pre-seed an artifact with an activityId
       artifactStore.push({
         id: 'artifact-pre',
@@ -276,16 +292,16 @@ describe('PLAN-022: Duplicate detection via SourceArtifact', () => {
     });
   });
 
-  describe('Multiple artifacts with identical timing coexist', () => {
-    it('should allow multiple artifacts with same timing (heuristic, not constraint)', async () => {
+  describe('Duplicate detection prevents additional artifacts (PLAN-040)', () => {
+    it('should only create one artifact regardless of how many duplicates are submitted', async () => {
       await service.intakeUpload(Buffer.from('data1'), 'ride1.fit', 'user-1');
       await service.intakeUpload(Buffer.from('data2'), 'ride2.fit', 'user-1');
       await service.intakeUpload(Buffer.from('data3'), 'ride3.fit', 'user-1');
-      expect(artifactStore).toHaveLength(3);
-      // All retained — first is primary, others are secondary
+      // Only the first (non-duplicate) creates an artifact
+      expect(artifactStore).toHaveLength(1);
       expect(artifactStore[0].role).toBe('primary');
-      expect(artifactStore[1].role).toBe('secondary');
-      expect(artifactStore[2].role).toBe('secondary');
+      // Drive is called only once (for the first upload)
+      expect(mockDriveAdapter.store).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -307,27 +323,34 @@ describe('PLAN-022: Duplicate detection via SourceArtifact', () => {
     });
   });
 
-  describe('Integration: intake → dedup → secondary → STOP', () => {
-    it('should perform complete flow: intake creates artifact, dedup classifies secondary, no materialization', async () => {
+  describe('Integration: intake → dedup → no artifact → STOP (PLAN-040)', () => {
+    it('should perform complete flow: intake creates artifact, dedup short-circuits with no new artifact or Drive call', async () => {
       // First upload
       const first = await service.intakeUpload(Buffer.from('data1'), 'ride1.fit', 'user-1');
       expect(first.duplicate).toBe(false);
       expect(first.role).toBe('primary');
       expect(first.materialized).toBe(false);
 
-      // Second upload (duplicate)
+      // Associate with a LIVE workout so the re-upload is an active duplicate (PLAN-050)
+      workoutStore.push({ id: 'workout-live', userId: 'user-1', status: 'completed', template: false });
+      const idx = artifactStore.findIndex((a) => a.id === first.artifactId);
+      artifactStore[idx].activityId = 'workout-live';
+
+      // Second upload (duplicate) — short-circuits before archival or artifact creation
       const second = await service.intakeUpload(Buffer.from('data2'), 'ride2.fit', 'user-1');
       expect(second.duplicate).toBe(true);
       expect(second.role).toBe('secondary');
       expect(second.materialized).toBe(false);
-      expect(second.activityId).toBeNull(); // existing had null
+      expect(second.activityId).toBe('workout-live'); // existing's live workout
 
       // No materialization occurred
       expect(mockWorkoutRepository.create).not.toHaveBeenCalled();
       expect(mockWorkoutRepository.insertMetrics).not.toHaveBeenCalled();
 
-      // Both artifacts retained
-      expect(artifactStore).toHaveLength(2);
+      // Only one artifact created (the non-duplicate)
+      expect(artifactStore).toHaveLength(1);
+      // Drive called only once (for the first upload)
+      expect(mockDriveAdapter.store).toHaveBeenCalledTimes(1);
     });
   });
 });

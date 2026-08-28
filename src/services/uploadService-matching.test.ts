@@ -268,12 +268,19 @@ describe('PLAN-037: Ingestion Matching & Deduplication', () => {
 
     it('duplicate import does not create duplicate source artifacts for the same activity', async () => {
       await uploadService.uploadSingle(Buffer.from('fake-fit-data'), 'workout1.fit', 'user-1');
+
+      // Clear mock call count before the duplicate import
+      mockFileStorage.store.mockClear();
+
       await uploadService.uploadSingle(Buffer.from('fake-fit-data'), 'workout2.fit', 'user-1');
 
       // Only ONE artifact exists — the duplicate was not created
       const artifacts = await db.collection('sourceArtifacts').find({ userId: 'user-1' }).toArray();
       expect(artifacts.length).toBe(1);
       expect(artifacts[0].role).toBe('primary');
+
+      // Drive store was NOT called for the duplicate import
+      expect(mockFileStorage.store).not.toHaveBeenCalled();
     });
   });
 
@@ -545,7 +552,7 @@ describe('PLAN-037H: Duplicate After Workout Deletion', () => {
     expect(artifacts).toBe(1);
   });
 
-  it('duplicate after Workout deletion does NOT create a new Workout or SourceArtifact', async () => {
+  it('re-import after Workout deletion RECOVERS by reusing the artifact (PLAN-050)', async () => {
     // Step 1: Import FIT → creates Workout + SourceArtifact
     const result1 = await uploadService.uploadSingle(Buffer.from('fit-data'), 'workout.fit', 'user-1');
     expect(result1.workoutId).toBeDefined();
@@ -557,8 +564,8 @@ describe('PLAN-037H: Duplicate After Workout Deletion', () => {
     expect(artifactCount).toBe(1);
 
     // Step 2: Delete the Workout (simulates what the DELETE route does)
-    await artifactRepo.disassociateByActivityId(result1.workoutId);
     await workoutRepo.delete(result1.workoutId);
+    await artifactRepo.disassociateByActivityId('user-1', result1.workoutId);
 
     // Confirm: Workout gone, SourceArtifact remains with null activityId
     workoutCount = await db.collection('workouts').countDocuments({ userId: 'user-1', template: false });
@@ -569,24 +576,26 @@ describe('PLAN-037H: Duplicate After Workout Deletion', () => {
     const survivingArtifact = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
     expect(survivingArtifact!.activityId).toBeNull();
 
-    // Step 3: Re-import the exact same FIT
+    // Step 3: Re-import the exact same FIT — PLAN-050 recovery, NOT a duplicate
     const result2 = await uploadService.uploadSingle(Buffer.from('fit-data'), 'workout.fit', 'user-1');
 
-    // Must be treated as duplicate
-    expect(result2.duplicate).toBe(true);
+    // Recovery: not flagged as a duplicate (the workout no longer existed)
+    expect(result2.duplicate).toBeUndefined();
+    expect(result2.workoutId).toBeDefined();
+    expect(result2.workoutId).not.toBe('');
 
-    // No new Workout created
+    // A new Workout IS created (restored)
     workoutCount = await db.collection('workouts').countDocuments({ userId: 'user-1', template: false });
-    expect(workoutCount).toBe(0);
+    expect(workoutCount).toBe(1);
 
-    // No new SourceArtifact created
+    // NO new SourceArtifact — the surviving artifact is reused
     artifactCount = await db.collection('sourceArtifacts').countDocuments({ userId: 'user-1' });
     expect(artifactCount).toBe(1);
 
-    // Existing SourceArtifact unchanged
+    // The reused SourceArtifact is re-associated to the restored workout as primary
     const artifact = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
-    expect(artifact!.activityId).toBeNull();
-    expect(artifact!.role).toBe('secondary');
+    expect(artifact!.activityId).toBe(result2.workoutId);
+    expect(artifact!.role).toBe('primary');
   });
 
   it('existing matching tests still work — planned activity matching', async () => {
@@ -612,5 +621,105 @@ describe('PLAN-037H: Duplicate After Workout Deletion', () => {
     const activity = await workoutRepo.findById(planned.id);
     expect(activity!.status).toBe('completed');
     expect(activity!.plannedTss).toBe(96);
+  });
+
+  describe('PLAN-051: cross-user isolation (integration)', () => {
+    beforeEach(async () => {
+      await settingsRepo.upsert('user-2', {
+        timezone: 'America/Chicago',
+        ftpHistory: [{ effectiveDate: new Date('2024-01-01'), ftpWatts: 250 }],
+      });
+    });
+
+    it('Test 1 — User B upload is NOT a duplicate of User A source', async () => {
+      // User A imports first (creates workout + primary artifact)
+      const a = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      expect(a.workoutId).toBeTruthy();
+
+      // User B imports the same source signature
+      const b = await uploadService.uploadSingle(Buffer.from('fit-data'), 'b.fit', 'user-2');
+      expect(b.duplicate).toBeUndefined();
+      expect(b.workoutId).toBeTruthy();
+      expect(b.workoutId).not.toBe(a.workoutId);
+
+      // Two independent artifacts, one per user
+      const aCount = await db.collection('sourceArtifacts').countDocuments({ userId: 'user-1' });
+      const bCount = await db.collection('sourceArtifacts').countDocuments({ userId: 'user-2' });
+      expect(aCount).toBe(1);
+      expect(bCount).toBe(1);
+      // Drive archived for both (no cross-user dedup short-circuit)
+      expect(mockFileStorage.store).toHaveBeenCalledTimes(2);
+    });
+
+    it('Test 2 — User B does NOT recover User A orphaned artifact', async () => {
+      // User A imports, then deletes the workout (orphaning the artifact)
+      const a = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      await workoutRepo.delete(a.workoutId);
+      await artifactRepo.disassociateByActivityId('user-1', a.workoutId);
+
+      const orphanBefore = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
+      expect(orphanBefore!.activityId).toBeNull();
+
+      // User B imports the same source — must NOT reuse User A's orphan
+      const b = await uploadService.uploadSingle(Buffer.from('fit-data'), 'b.fit', 'user-2');
+      expect(b.duplicate).toBeUndefined();
+      expect(b.workoutId).toBeTruthy();
+
+      // A brand-new artifact created for User B; User A's orphan untouched
+      const bCount = await db.collection('sourceArtifacts').countDocuments({ userId: 'user-2' });
+      expect(bCount).toBe(1);
+      const orphanAfter = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
+      expect(orphanAfter!.activityId).toBeNull();
+      expect(orphanAfter!.role).toBe('secondary');
+      expect(orphanAfter!._id.toString()).toBe(orphanBefore!._id.toString());
+    });
+
+    it('Test 3 — Same-user orphan still recovers (regression guard)', async () => {
+      const a = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      await workoutRepo.delete(a.workoutId);
+      await artifactRepo.disassociateByActivityId('user-1', a.workoutId);
+
+      const re = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      expect(re.duplicate).toBeUndefined();
+      expect(re.workoutId).toBeTruthy();
+      // No second artifact — the orphan is reused
+      const count = await db.collection('sourceArtifacts').countDocuments({ userId: 'user-1' });
+      expect(count).toBe(1);
+      const artifact = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
+      expect(artifact!.activityId).toBe(re.workoutId);
+      expect(artifact!.role).toBe('primary');
+    });
+
+    it('Test 4 — Workout deletion for User A does not modify User B artifacts', async () => {
+      const a = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      const b = await uploadService.uploadSingle(Buffer.from('fit-data'), 'b.fit', 'user-2');
+
+      // Simulate the DELETE route: user-scoped disassociation for User A only
+      await artifactRepo.disassociateByActivityId('user-1', a.workoutId);
+
+      const artA = await db.collection('sourceArtifacts').findOne({ userId: 'user-1' });
+      const artB = await db.collection('sourceArtifacts').findOne({ userId: 'user-2' });
+      expect(artA!.activityId).toBeNull(); // disassociated
+      expect(artB!.activityId).toBe(b.workoutId); // untouched
+      expect(artB!.role).toBe('primary');
+    });
+
+    it('Test 6 — Active duplicate stays isolated per user', async () => {
+      const a = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a.fit', 'user-1');
+      // User A re-imports (active duplicate) → short-circuit
+      const aDup = await uploadService.uploadSingle(Buffer.from('fit-data'), 'a2.fit', 'user-1');
+      expect(aDup.duplicate).toBe(true);
+
+      // User B imports the same source → independent import, not a duplicate
+      const b = await uploadService.uploadSingle(Buffer.from('fit-data'), 'b.fit', 'user-2');
+      expect(b.duplicate).toBeUndefined();
+      expect(b.workoutId).not.toBe(a.workoutId);
+
+      // User A: exactly one artifact/workout; User B: exactly one artifact/workout
+      expect(await db.collection('sourceArtifacts').countDocuments({ userId: 'user-1' })).toBe(1);
+      expect(await db.collection('sourceArtifacts').countDocuments({ userId: 'user-2' })).toBe(1);
+      expect(await db.collection('workouts').countDocuments({ userId: 'user-1', template: false })).toBe(1);
+      expect(await db.collection('workouts').countDocuments({ userId: 'user-2', template: false })).toBe(1);
+    });
   });
 });

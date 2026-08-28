@@ -9,6 +9,7 @@ export interface UploadResult {
   summary: WorkoutSummary;
   matchedExisting?: boolean;
   duplicate?: boolean;
+  archival?: 'drive' | 'fallback';
 }
 
 /** Brief summary of a workout included in upload results */
@@ -47,4 +48,5 @@ export interface IntakeResult {
   activityId: string | null;
   role: 'primary' | 'secondary';
   materialized: boolean;
+  driveArchivalFailed?: boolean;
 }

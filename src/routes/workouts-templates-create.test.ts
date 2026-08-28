@@ -211,7 +211,7 @@ describe('PLAN-016: POST /api/workouts/templates — Create template', () => {
       });
       // Calendar query should not find it
       const calRes = await request(app).get('/api/workouts/calendar?dateFrom=2020-01-01&dateTo=2030-12-31');
-      const titles = calRes.body.data.map((a: any) => a.title);
+      const titles = calRes.body.data.activities.map((a: any) => a.title);
       expect(titles).not.toContain('Isolated Template');
     });
 
