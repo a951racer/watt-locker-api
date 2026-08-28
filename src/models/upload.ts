@@ -7,6 +7,9 @@ export interface UploadResult {
   workoutId: string;
   driveFileId: string;
   summary: WorkoutSummary;
+  matchedExisting?: boolean;
+  duplicate?: boolean;
+  archival?: 'drive' | 'fallback';
 }
 
 /** Brief summary of a workout included in upload results */
@@ -30,4 +33,20 @@ export interface FailedUpload {
   fileName: string;
   error: string;
   errorCode: string;
+}
+
+/** Result of a successful intake (PLAN-021 — no materialization) */
+export interface IntakeResult {
+  artifactId: string;
+  driveFileId: string;
+  originalFileName: string;
+  startTime?: Date;
+  durationSeconds?: number;
+  activityType?: string;
+  duplicate: boolean;
+  matched: boolean;
+  activityId: string | null;
+  role: 'primary' | 'secondary';
+  materialized: boolean;
+  driveArchivalFailed?: boolean;
 }

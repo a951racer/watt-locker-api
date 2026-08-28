@@ -122,6 +122,22 @@ export class TcxFileParser implements WorkoutParser {
   }
 
   /**
+   * Light parse — extract only summary-level metadata from TCX without processing trackpoints.
+   */
+  async parseLightMetadata(buffer: Buffer): Promise<{ startTime?: Date; durationSeconds?: number; activityType?: string }> {
+    try {
+      const parsed = await this.parse(buffer);
+      return {
+        startTime: parsed.summary.startTime,
+        durationSeconds: parsed.summary.durationSeconds,
+        activityType: parsed.summary.activityType,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Extract the Activity element from the parsed XML structure.
    */
   private extractActivity(xmlData: any): TcxActivity | null { // eslint-disable-line @typescript-eslint/no-explicit-any

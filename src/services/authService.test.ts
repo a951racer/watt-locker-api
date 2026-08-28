@@ -56,7 +56,7 @@ describe('AuthService', () => {
       expect(mockUserRepository.create).toHaveBeenCalledWith('test@example.com', 'hashed-password');
       expect(result.accessToken).toBeDefined();
       expect(result.refreshToken).toBeDefined();
-      expect(result.expiresIn).toBe(900); // 15m = 900s
+      expect(result.expiresIn).toBe(86400); // 1d = 86400s (current access token TTL)
       expect(result.user).toEqual(mockUser);
     });
 
@@ -123,7 +123,7 @@ describe('AuthService', () => {
       expect(mockedComparePassword).toHaveBeenCalledWith('password123', 'hashed-password');
       expect(result.accessToken).toBeDefined();
       expect(result.refreshToken).toBeDefined();
-      expect(result.expiresIn).toBe(900);
+      expect(result.expiresIn).toBe(86400); // 1d = 86400s (current access token TTL)
       expect(result.user.id).toBe(mockUser.id);
       expect(result.user.email).toBe(mockUser.email);
     });

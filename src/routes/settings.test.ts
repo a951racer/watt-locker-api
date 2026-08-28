@@ -41,6 +41,7 @@ const mockSettings: UserSettings = {
   driveStoragePath: 'WattLocker',
   driveInboxPath: 'WattLocker/Inbox',
   connectedSources: [],
+  timezone: 'America/Chicago',
   updatedAt: new Date('2024-06-01'),
 };
 

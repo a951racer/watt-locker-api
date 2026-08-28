@@ -21,9 +21,13 @@ function createMockWorkoutService(): jest.Mocked<IWorkoutService> {
 /** Create a mock UploadService */
 function createMockUploadService(): jest.Mocked<IUploadService> {
   return {
+    uploadFile: jest.fn(),
     uploadSingle: jest.fn(),
     uploadBulk: jest.fn(),
     ingestFromInbox: jest.fn(),
+    intakeUpload: jest.fn(),
+    materializeActivity: jest.fn(),
+    clearActivityMaterialization: jest.fn(),
   };
 }
 
@@ -65,6 +69,9 @@ function sampleWorkout(overrides?: Partial<WorkoutRecord>): WorkoutRecord {
   return {
     id: 'workout-1',
     userId: 'user-123',
+    status: 'completed',
+    template: false,
+    date: '2024-01-15',
     activityType: 'ride',
     startTime: new Date('2024-01-15T08:00:00Z'),
     endTime: new Date('2024-01-15T09:30:00Z'),
@@ -77,7 +84,7 @@ function sampleWorkout(overrides?: Partial<WorkoutRecord>): WorkoutRecord {
     createdAt: new Date('2024-01-15T10:00:00Z'),
     updatedAt: new Date('2024-01-15T10:00:00Z'),
     ...overrides,
-  };
+  } as WorkoutRecord;
 }
 
 describe('Workouts Routes', () => {
@@ -153,7 +160,8 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 400 for invalid pageSize parameter', async () => {
-      const res = await request(app).get('/api/workouts').query({ pageSize: '200' });
+      // Current intentional limit is 1..1000; use a value beyond the max.
+      const res = await request(app).get('/api/workouts').query({ pageSize: '2000' });
 
       expect(res.status).toBe(400);
       expect(res.body.errors[0].field).toBe('pageSize');
@@ -231,6 +239,9 @@ describe('Workouts Routes', () => {
   describe('PUT /api/workouts/:id', () => {
     it('should update workout metadata and return updated record', async () => {
       const updated = sampleWorkout({ title: 'Morning Ride' });
+      // Status-aware PUT handler loads the existing workout first (for lifecycle
+      // editability), then updates.
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout());
       mockWorkoutService.updateWorkout.mockResolvedValue(updated);
 
       const res = await request(app)
@@ -243,6 +254,7 @@ describe('Workouts Routes', () => {
     });
 
     it('should call updateWorkout with correct params', async () => {
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout());
       mockWorkoutService.updateWorkout.mockResolvedValue(sampleWorkout());
 
       await request(app)
@@ -257,6 +269,9 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 400 for invalid title type', async () => {
+      // Planned workout so field-type validation (not the completed-field
+      // allowlist) is what rejects the request.
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout({ status: 'planned' }));
       const res = await request(app)
         .put('/api/workouts/workout-1')
         .send({ title: 123 });
@@ -266,6 +281,7 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 400 for invalid tags type', async () => {
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout({ status: 'planned' }));
       const res = await request(app)
         .put('/api/workouts/workout-1')
         .send({ tags: 'not-an-array' });
@@ -275,6 +291,7 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 400 for non-string tag in array', async () => {
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout({ status: 'planned' }));
       const res = await request(app)
         .put('/api/workouts/workout-1')
         .send({ tags: ['valid', 123] });
@@ -284,6 +301,7 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 400 for empty activityType', async () => {
+      mockWorkoutService.getWorkout.mockResolvedValue(sampleWorkout({ status: 'planned' }));
       const res = await request(app)
         .put('/api/workouts/workout-1')
         .send({ activityType: '  ' });
@@ -293,7 +311,8 @@ describe('Workouts Routes', () => {
     });
 
     it('should return 404 when workout not found', async () => {
-      mockWorkoutService.updateWorkout.mockRejectedValue(new NotFoundError('Workout not found'));
+      // A missing workout is now detected when the handler loads it up front.
+      mockWorkoutService.getWorkout.mockRejectedValue(new NotFoundError('Workout not found'));
 
       const res = await request(app)
         .put('/api/workouts/nonexistent')
@@ -373,7 +392,15 @@ describe('Workouts Routes', () => {
           distanceMeters: 30000,
         },
       };
-      mockUploadService.uploadSingle.mockResolvedValue(uploadResult);
+      // The upload endpoint delegates to uploadFile (which expands archives);
+      // for a single file it returns { total: 1, successful: [result] } and the
+      // handler responds 201 with successful[0].
+      mockUploadService.uploadFile.mockResolvedValue({
+        total: 1,
+        successful: [uploadResult],
+        failed: [],
+        inProgress: 0,
+      });
 
       const res = await request(app)
         .post('/api/workouts/upload')
@@ -387,11 +414,16 @@ describe('Workouts Routes', () => {
       expect(res.body.errors).toBeNull();
     });
 
-    it('should call uploadSingle with correct params', async () => {
-      mockUploadService.uploadSingle.mockResolvedValue({
-        workoutId: 'w1',
-        driveFileId: 'd1',
-        summary: { activityType: 'ride', startTime: new Date(), durationSeconds: 100, distanceMeters: 1000 },
+    it('should call uploadFile with correct params', async () => {
+      mockUploadService.uploadFile.mockResolvedValue({
+        total: 1,
+        successful: [{
+          workoutId: 'w1',
+          driveFileId: 'd1',
+          summary: { activityType: 'ride', startTime: new Date(), durationSeconds: 100, distanceMeters: 1000 },
+        }],
+        failed: [],
+        inProgress: 0,
       });
 
       await request(app)
@@ -402,7 +434,7 @@ describe('Workouts Routes', () => {
           dataSource: 'strava',
         });
 
-      expect(mockUploadService.uploadSingle).toHaveBeenCalledWith(
+      expect(mockUploadService.uploadFile).toHaveBeenCalledWith(
         expect.any(Buffer),
         'test.tcx',
         'user-123',

@@ -8,6 +8,7 @@ export interface SettingsDocument {
   driveInboxPath: string;
   connectedSources: UserSettings['connectedSources'];
   ftpHistory?: Array<{ effectiveDate: Date; ftpWatts: number }>;
+  timezone: string;
   updatedAt: Date;
 }
 
@@ -16,6 +17,7 @@ const SETTINGS_DEFAULTS = {
   driveStoragePath: 'WattLocker',
   driveInboxPath: 'WattLocker/Inbox',
   connectedSources: [],
+  timezone: 'America/Chicago',
 };
 
 /** Settings repository interface for database access abstraction */
@@ -47,6 +49,7 @@ export class MongoSettingsRepository implements ISettingsRepository {
       driveInboxPath: doc.driveInboxPath,
       connectedSources: doc.connectedSources,
       ftpHistory: doc.ftpHistory,
+      timezone: doc.timezone ?? SETTINGS_DEFAULTS.timezone,
       updatedAt: doc.updatedAt,
     };
   }
@@ -71,6 +74,9 @@ export class MongoSettingsRepository implements ISettingsRepository {
     if (settings.ftpHistory !== undefined) {
       $set.ftpHistory = settings.ftpHistory;
     }
+    if (settings.timezone !== undefined) {
+      $set.timezone = settings.timezone;
+    }
 
     // $setOnInsert only includes fields NOT already in $set to avoid conflicts
     const $setOnInsert: Record<string, unknown> = { userId };
@@ -82,6 +88,9 @@ export class MongoSettingsRepository implements ISettingsRepository {
     }
     if ($set.connectedSources === undefined) {
       $setOnInsert.connectedSources = SETTINGS_DEFAULTS.connectedSources;
+    }
+    if ($set.timezone === undefined) {
+      $setOnInsert.timezone = SETTINGS_DEFAULTS.timezone;
     }
 
     const result = await this.collection.findOneAndUpdate(
@@ -97,6 +106,7 @@ export class MongoSettingsRepository implements ISettingsRepository {
       driveInboxPath: doc.driveInboxPath,
       connectedSources: doc.connectedSources,
       ftpHistory: doc.ftpHistory,
+      timezone: doc.timezone ?? SETTINGS_DEFAULTS.timezone,
       updatedAt: doc.updatedAt,
     };
   }

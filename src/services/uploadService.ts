@@ -4,9 +4,10 @@
  */
 
 import { ParsedWorkout } from '../models/workout';
-import { UploadResult, WorkoutSummary, BulkUploadResult, FailedUpload } from '../models/upload';
+import { UploadResult, WorkoutSummary, BulkUploadResult, FailedUpload, IntakeResult } from '../models/upload';
 import { ParserFactory } from '../parsers/parserFactory';
 import { IWorkoutRepository } from '../repositories/workoutRepository';
+import { ISourceArtifactRepository } from '../repositories/sourceArtifactRepository';
 import { FileStorageAdapter, FileMetadata, GoogleDriveAdapter, GoogleDriveAdapterConfig } from '../storage/googleDriveAdapter';
 import { ISettingsService } from './settingsService';
 import { ValidationError, ConflictError } from '../utils/errors';
@@ -53,6 +54,20 @@ export interface IUploadService {
     options?: BulkUploadOptions,
   ): Promise<BulkUploadResult>;
   ingestFromInbox(userId: string): Promise<BulkUploadResult>;
+  intakeUpload(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<IntakeResult>;
+  materializeActivity(
+    activityId: string,
+    userId: string,
+    fileBuffer: Buffer,
+    fileName: string,
+    artifactId: string,
+  ): Promise<void>;
+  clearActivityMaterialization(activityId: string, userId: string): Promise<void>;
 }
 
 /** Logger interface for dependency injection */
@@ -79,6 +94,7 @@ export class UploadService implements IUploadService {
     private readonly fileStorageAdapter: FileStorageAdapter,
     private readonly settingsService: ISettingsService,
     private readonly logger: Logger = defaultLogger,
+    private readonly sourceArtifactRepository?: ISourceArtifactRepository,
   ) {}
 
   /**
@@ -170,15 +186,118 @@ export class UploadService implements IUploadService {
   /**
    * Upload a single workout file through the full pipeline:
    * 1. Validate file format (via ParserFactory)
-   * 2. Parse file to get structured workout data
-   * 3. Check for duplicates (same user, startTime, durationSeconds)
-   * 4. Store raw file in Google Drive
-   * 5. Save workout record + metrics to DB
+   * 2. Intake: store file, create SourceArtifact, detect duplicates, match planned activities
+   * 3. Materialize: parse metrics and populate the matched/new activity
    *
-   * Transactional guarantee: if Drive upload succeeds but DB write fails,
-   * the orphaned Drive file is logged for cleanup.
+   * When a SourceArtifact repository is available, uses the intake+materialize pipeline
+   * which supports planned activity matching and preserves planned values.
+   * Falls back to the legacy create-new-activity path otherwise.
    */
   async uploadSingle(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<UploadResult> {
+    // Use the intake+materialize pipeline when SourceArtifact repository is available
+    if (this.sourceArtifactRepository) {
+      return this.uploadWithMatching(file, fileName, userId, options);
+    }
+
+    // Legacy path: always creates a new completed activity (no matching)
+    return this.uploadLegacy(file, fileName, userId, options);
+  }
+
+  /**
+   * New ingestion pipeline with planned-activity matching.
+   * 1. Intake (store file, create artifact, detect duplicates, match planned activities)
+   * 2. Materialize (full parse + metrics onto matched or new activity)
+   */
+  private async uploadWithMatching(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<UploadResult> {
+    // Step 1: Intake — creates SourceArtifact, detects duplicates, matches planned activities
+    const intake = await this.intakeUpload(file, fileName, userId, options);
+
+    // Step 2: Handle duplicate — source file already archived
+    if (intake.duplicate) {
+      // Already imported — do not create anything new
+      return {
+        workoutId: intake.activityId || '',
+        driveFileId: intake.driveFileId,
+        summary: {
+          activityType: intake.activityType || 'ride',
+          startTime: intake.startTime || new Date(),
+          durationSeconds: intake.durationSeconds || 0,
+          distanceMeters: 0,
+        },
+        matchedExisting: !!intake.activityId,
+        duplicate: true,
+      };
+    }
+
+    // Step 3: If matched to an existing planned activity, materialize onto it
+    if (intake.matched && intake.activityId) {
+      await this.materializeActivity(intake.activityId, userId, file, fileName, intake.artifactId);
+      return {
+        workoutId: intake.activityId,
+        driveFileId: intake.driveFileId,
+        summary: {
+          activityType: intake.activityType || 'ride',
+          startTime: intake.startTime || new Date(),
+          durationSeconds: intake.durationSeconds || 0,
+          distanceMeters: 0,
+        },
+        matchedExisting: true,
+        archival: intake.driveArchivalFailed ? 'fallback' : 'drive',
+      };
+    }
+
+    // Step 4: No match — create a new completed activity and materialize onto it
+    const fileExtension = this.extractExtension(fileName);
+    const parser = this.parserFactory.getParser(fileExtension);
+    const parsedWorkout: ParsedWorkout = await parser.parse(file);
+
+    // Derive calendar date
+    const settings = await this.settingsService.getSettings(userId);
+    const userTimezone = settings.timezone ?? 'America/Chicago';
+    const activityDate = parsedWorkout.summary.startTime.toLocaleDateString('en-CA', { timeZone: userTimezone });
+
+    // Create a minimal new activity
+    const newActivity = await this.workoutRepository.create({
+      userId,
+      status: 'completed',
+      template: false,
+      date: activityDate,
+      activityType: parsedWorkout.summary.activityType,
+      dataSource: options?.dataSource ?? 'manual',
+    } as WorkoutRecord);
+
+    // Associate the artifact with the new activity
+    await this.sourceArtifactRepository!.update(intake.artifactId, {
+      activityId: newActivity.id,
+    });
+
+    // Materialize full workout data onto the new activity
+    await this.materializeActivity(newActivity.id, userId, file, fileName, intake.artifactId);
+
+    return {
+      workoutId: newActivity.id,
+      driveFileId: intake.driveFileId,
+      summary: this.buildSummary(parsedWorkout),
+      matchedExisting: false,
+      archival: intake.driveArchivalFailed ? 'fallback' : 'drive',
+    };
+  }
+
+  /**
+   * Legacy upload path — always creates a new completed activity.
+   * Used when SourceArtifact repository is not available.
+   */
+  private async uploadLegacy(
     file: Buffer,
     fileName: string,
     userId: string,
@@ -271,6 +390,207 @@ export class UploadService implements IUploadService {
       });
       throw error;
     }
+  }
+
+  /**
+   * PLAN-021: Intake upload — lightweight source file ingestion.
+   * Validates → uploads to Drive → light parses → creates SourceArtifact.
+   * Does NOT perform full materialization, dedup, or Activity matching.
+   */
+  async intakeUpload(
+    file: Buffer,
+    fileName: string,
+    userId: string,
+    options?: UploadOptions,
+  ): Promise<IntakeResult> {
+    if (!this.sourceArtifactRepository) {
+      throw new ValidationError('Intake upload is not configured (missing source artifact repository)');
+    }
+
+    // 1. Validate format
+    const fileExtension = this.extractExtension(fileName);
+    const parser = this.parserFactory.getParser(fileExtension);
+
+    // 2. Light parse FIRST — needed for duplicate detection before any archival side effect
+    let startTime: Date | undefined;
+    let durationSeconds: number | undefined;
+    let activityType: string | undefined;
+
+    try {
+      if (parser.parseLightMetadata) {
+        const meta = await parser.parseLightMetadata(file);
+        startTime = meta.startTime;
+        durationSeconds = meta.durationSeconds;
+        activityType = meta.activityType;
+      } else {
+        const parsed = await parser.parse(file);
+        startTime = parsed.summary.startTime;
+        durationSeconds = parsed.summary.durationSeconds;
+        activityType = parsed.summary.activityType;
+      }
+    } catch {
+      this.logger.warn('Light parse failed during intake', { userId, fileName });
+    }
+
+    // 3. Duplicate detection BEFORE archival — no Drive side effect for duplicates
+    if (startTime && durationSeconds != null) {
+      const existing = await this.sourceArtifactRepository.findDuplicateCandidate(userId, startTime, durationSeconds);
+      if (existing) {
+        // Distinguish an ACTIVE duplicate from an ORPHANED source (PLAN-050).
+        // An active duplicate's activityId still points to a live WorkoutRecord —
+        // re-importing must short-circuit (no new workout/artifact/Drive upload).
+        // An orphaned source (activityId=null, or pointing at a workout that was
+        // deleted) must be recoverable: reuse the existing artifact and re-import.
+        const liveActivity = existing.activityId
+          ? await this.workoutRepository.findById(existing.activityId)
+          : null;
+        const isActiveDuplicate = !!liveActivity && liveActivity.userId === userId;
+
+        if (isActiveDuplicate) {
+          this.logger.info('Duplicate source file detected during intake (active workout exists)', {
+            userId, fileName, existingArtifactId: existing.id, existingActivityId: existing.activityId,
+          });
+          return {
+            artifactId: existing.id,
+            driveFileId: existing.driveFileId,
+            originalFileName: fileName,
+            startTime,
+            durationSeconds,
+            activityType,
+            duplicate: true,
+            matched: false,
+            activityId: existing.activityId,
+            role: 'secondary',
+            materialized: existing.materialized,
+          };
+        }
+
+        // Orphaned source — the workout was deleted (or never associated).
+        // Reuse the existing SourceArtifact (preserving provenance, Drive
+        // reference, filename, importedAt, format, and any local fileContent),
+        // reset it to an unmaterialized primary, and let the caller re-import
+        // by matching a planned Activity or creating a new one. No new artifact,
+        // no Drive re-upload.
+        this.logger.info('Orphaned source file re-import detected during intake (no live workout) — recovering', {
+          userId, fileName, existingArtifactId: existing.id, staleActivityId: existing.activityId,
+        });
+        await this.sourceArtifactRepository.update(existing.id, {
+          activityId: null,
+          role: 'primary',
+          materialized: false,
+        });
+
+        // Re-match against planned/skipped activities for the source's date.
+        let recoveredMatch = false;
+        let recoveredActivityId: string | null = null;
+        const settings = await this.settingsService.getSettings(userId);
+        const candidateDate = startTime.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+        const candidates = await this.workoutRepository.findPlannedCandidates(userId, candidateDate, activityType);
+        if (candidates.length > 0) {
+          recoveredActivityId = candidates[0].id;
+          recoveredMatch = true;
+          await this.sourceArtifactRepository.update(existing.id, { activityId: candidates[0].id });
+        }
+
+        return {
+          artifactId: existing.id,
+          driveFileId: existing.driveFileId,
+          originalFileName: fileName,
+          startTime,
+          durationSeconds,
+          activityType,
+          duplicate: false,
+          matched: recoveredMatch,
+          activityId: recoveredActivityId,
+          role: 'primary',
+          materialized: false,
+          driveArchivalFailed: existing.driveFileId === 'local',
+        };
+      }
+    }
+
+    // 4. Archive to Drive (only for genuinely new source files)
+    const mimeType = this.getMimeType(fileExtension);
+    const fileMetadata: FileMetadata = {
+      fileName,
+      mimeType,
+      workoutDate: startTime ?? new Date(),
+      dataSource: options?.dataSource ?? 'manual',
+    };
+
+    const userDriveAdapter = await this.getUserDriveAdapter(userId);
+    const adapter = userDriveAdapter ?? this.fileStorageAdapter;
+
+    let storageRef: { fileId: string; webViewLink?: string };
+    let fileContentFallback: Buffer | undefined;
+    let driveArchivalFailed = false;
+    try {
+      storageRef = await adapter.store(file, fileMetadata);
+      this.logger.info('Drive storage succeeded during intake', { userId, fileName, fileId: storageRef.fileId });
+    } catch (err) {
+      driveArchivalFailed = true;
+      const driveConfigured = !!userDriveAdapter;
+      if (driveConfigured) {
+        this.logger.warn('Drive storage failed; using MongoDB source fallback', {
+          userId, fileName, error: err instanceof Error ? err.message : String(err),
+        });
+      } else {
+        this.logger.info('Drive not configured; using MongoDB source fallback', { userId, fileName });
+      }
+      storageRef = { fileId: 'local', webViewLink: undefined };
+      fileContentFallback = file;
+    }
+
+    // 5. Create SourceArtifact
+    const artifact = await this.sourceArtifactRepository.create({
+      userId,
+      activityId: null,
+      role: 'primary',
+      materialized: false,
+      source: (options?.dataSource ?? 'manual') as 'manual' | 'strava' | 'garmin' | 'trainingpeaks',
+      format: fileExtension as 'fit' | 'tcx' | 'gpx',
+      originalFileName: fileName,
+      importedAt: new Date(),
+      driveFileId: storageRef.fileId,
+      driveWebViewLink: storageRef.webViewLink,
+      fileContent: fileContentFallback,
+      startTime,
+      durationSeconds,
+      activityType,
+    });
+
+    // 6. Planned/skipped activity matching
+    let isMatched = false;
+    let finalActivityId: string | null = null;
+    if (startTime) {
+      const settings = await this.settingsService.getSettings(userId);
+      const candidateDate = startTime.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+      const candidates = await this.workoutRepository.findPlannedCandidates(userId, candidateDate, activityType);
+
+      if (candidates.length > 0) {
+        const matched = candidates[0];
+        finalActivityId = matched.id;
+        isMatched = true;
+        await this.sourceArtifactRepository.update(artifact.id, {
+          activityId: matched.id,
+        });
+      }
+    }
+
+    return {
+      artifactId: artifact.id,
+      driveFileId: storageRef.fileId,
+      originalFileName: fileName,
+      startTime,
+      durationSeconds,
+      activityType,
+      duplicate: false,
+      matched: isMatched,
+      activityId: finalActivityId,
+      role: 'primary' as const,
+      materialized: false,
+      driveArchivalFailed,
+    };
   }
 
   /**
@@ -393,6 +713,218 @@ export class UploadService implements IUploadService {
     };
   }
 
+  /**
+   * PLAN-024: Materialize an Activity from a source file.
+   * Parses the file, computes all metrics, and updates the existing Activity
+   * with actual values while preserving any planned values.
+   */
+  async materializeActivity(
+    activityId: string,
+    userId: string,
+    fileBuffer: Buffer,
+    fileName: string,
+    artifactId: string,
+  ): Promise<void> {
+    // 1. Parse the file
+    const fileExtension = this.extractExtension(fileName);
+    const parser = this.parserFactory.getParser(fileExtension);
+    const parsedWorkout: ParsedWorkout = await parser.parse(fileBuffer);
+
+    // 2. Compute all metrics
+    const avgPower = this.computeAverage(parsedWorkout.dataPoints, 'powerWatts');
+    const maxPower = this.computeMax(parsedWorkout.dataPoints, 'powerWatts');
+    // PLAN-044: prefer stream-computed NP; fall back to device NP only when unavailable
+    const normalizedPower = this.selectNormalizedPower(parsedWorkout);
+
+    const settings = await this.settingsService.getSettings(userId);
+    const ftpUsed = lookupFtp(parsedWorkout.summary.startTime, settings.ftpHistory, parsedWorkout.summary.ftpWatts);
+
+    const ftpFromHistory = settings.ftpHistory && settings.ftpHistory.length > 0 &&
+      [...settings.ftpHistory].some(e => new Date(e.effectiveDate).getTime() <= parsedWorkout.summary.startTime.getTime());
+    const tss = ftpFromHistory
+      ? this.computeTSS(normalizedPower, parsedWorkout.summary.movingTimeSeconds ?? parsedWorkout.summary.durationSeconds, ftpUsed)
+      : (parsedWorkout.summary.tss ?? this.computeTSS(normalizedPower, parsedWorkout.summary.movingTimeSeconds ?? parsedWorkout.summary.durationSeconds, ftpUsed));
+    const intensityFactor = normalizedPower ? Math.round((normalizedPower / ftpUsed) * 1000) / 1000 : undefined;
+    const aerobicDecoupling = this.computeAerobicDecoupling(parsedWorkout.dataPoints);
+    const avgHr = this.computeAverage(parsedWorkout.dataPoints, 'heartRateBpm');
+    const maxHr = this.computeMax(parsedWorkout.dataPoints, 'heartRateBpm');
+    const avgCadence = this.computeAvgCadence(parsedWorkout.dataPoints);
+    const avgSpeed = this.computeAvgSpeed(parsedWorkout.summary.distanceMeters, parsedWorkout.summary.movingTimeSeconds, parsedWorkout.summary.durationSeconds);
+
+    const powerValues = parsedWorkout.dataPoints
+      .map(dp => dp.powerWatts)
+      .filter((v): v is number => v != null);
+    const maxPowers = powerValues.length >= 5 ? computeMaxPowers(powerValues) : undefined;
+
+    // 3. Derive Activity.date from startTime + user timezone
+    const userTimezone = settings.timezone ?? 'America/Chicago';
+    const activityDate = parsedWorkout.summary.startTime.toLocaleDateString('en-CA', { timeZone: userTimezone });
+
+    // 4. Update the Activity with actual values while PRESERVING planned values
+    // Use a targeted $set that only sets actual/derived fields
+    const $set: Record<string, unknown> = {
+      status: 'completed',
+      date: activityDate,
+      activityType: parsedWorkout.summary.activityType,
+      startTime: parsedWorkout.summary.startTime,
+      endTime: parsedWorkout.summary.endTime,
+      durationSeconds: parsedWorkout.summary.durationSeconds,
+      distanceMeters: parsedWorkout.summary.distanceMeters,
+      elevationGainMeters: parsedWorkout.summary.elevationGainMeters,
+      fileFormat: parsedWorkout.sourceFormat,
+      updatedAt: new Date(),
+    };
+
+    // Optional actual fields
+    if (parsedWorkout.summary.subActivityType !== undefined) $set.subActivityType = parsedWorkout.summary.subActivityType;
+    if (parsedWorkout.summary.movingTimeSeconds !== undefined) $set.movingTimeSeconds = parsedWorkout.summary.movingTimeSeconds;
+    if (parsedWorkout.summary.elevationLossMeters !== undefined) $set.elevationLossMeters = parsedWorkout.summary.elevationLossMeters;
+    if (parsedWorkout.summary.calories !== undefined) $set.calories = parsedWorkout.summary.calories;
+    if (parsedWorkout.summary.avgTemperatureCelsius !== undefined) $set.avgTemperatureCelsius = parsedWorkout.summary.avgTemperatureCelsius;
+    if (parsedWorkout.summary.maxTemperatureCelsius !== undefined) $set.maxTemperatureCelsius = parsedWorkout.summary.maxTemperatureCelsius;
+    if (parsedWorkout.summary.totalWorkKj !== undefined) $set.totalWorkKj = parsedWorkout.summary.totalWorkKj;
+    if (parsedWorkout.summary.maxCadenceRpm !== undefined) $set.maxCadenceRpm = parsedWorkout.summary.maxCadenceRpm;
+    if (parsedWorkout.summary.totalPedalRevolutions !== undefined) $set.totalPedalRevolutions = parsedWorkout.summary.totalPedalRevolutions;
+    if (parsedWorkout.summary.maxSpeedMps !== undefined) $set.maxSpeedMps = parsedWorkout.summary.maxSpeedMps;
+    if (parsedWorkout.summary.aerobicTrainingEffect !== undefined) $set.aerobicTrainingEffect = parsedWorkout.summary.aerobicTrainingEffect;
+    if (parsedWorkout.summary.anaerobicTrainingEffect !== undefined) $set.anaerobicTrainingEffect = parsedWorkout.summary.anaerobicTrainingEffect;
+    if (avgPower !== undefined) $set.avgPowerWatts = avgPower;
+    if (maxPower !== undefined) $set.maxPowerWatts = maxPower;
+    if (normalizedPower !== undefined) $set.normalizedPowerWatts = normalizedPower;
+    if (tss !== undefined) $set.tss = tss;
+    if (intensityFactor !== undefined) $set.intensityFactor = intensityFactor;
+    if (normalizedPower !== undefined) $set.ftpUsed = ftpUsed;
+    if (aerobicDecoupling !== undefined) $set.aerobicDecoupling = aerobicDecoupling;
+    if (maxPowers !== undefined) $set.maxPowers = maxPowers;
+    if (avgHr !== undefined) $set.avgHeartRateBpm = avgHr;
+    if (maxHr !== undefined) $set.maxHeartRateBpm = maxHr;
+    if (avgCadence !== undefined) $set.avgCadenceRpm = avgCadence;
+    if (avgSpeed !== undefined) $set.avgSpeedMps = avgSpeed;
+
+    // Directly update via the workouts collection to avoid overwriting planned fields
+    // The repository.update method only sets known fields — we need raw access
+    // Use findOneAndUpdate through the repository's update method won't work here
+    // because it doesn't support all these fields. We'll use a raw-style update.
+    // However, IWorkoutRepository doesn't expose raw $set — we'll add a method or use update.
+    // The simplest approach: use the existing update which accepts Partial<WorkoutMetadata> | ActivityUpdateFields
+    // But that won't cover all fields. We need to use the workoutRepository directly.
+    // Since MongoWorkoutRepository's update does not cover all actual fields (power metrics etc.),
+    // we'll chain updateStatus + updatePowerMetrics + updateMaxPowers + a general update.
+    // Actually, looking at the create method — it accepts a full WorkoutRecord.
+    // The cleanest approach: add a materialize-specific update or use findOneAndUpdate directly.
+    // For now, let's use the combination approach that leverages existing interface methods.
+
+    // Load existing activity to preserve planned values (verify it exists)
+    const existing = await this.workoutRepository.findById(activityId);
+    if (!existing) {
+      throw new ValidationError(`Activity not found: ${activityId}`);
+    }
+
+    // Build a minimal update using updateStatus + updatePowerMetrics + updateMaxPowers
+    // plus the general update for metadata fields.
+    // Actually we need a raw update — let's extend IWorkoutRepository with materializeUpdate.
+    // Instead, let's use the fact that MongoWorkoutRepository has access to the collection.
+    // The pragmatic solution: call multiple repository methods in sequence.
+
+    // Step A: Update status
+    await this.workoutRepository.updateStatus(activityId, 'completed');
+
+    // Step B: Update power metrics
+    if (tss !== undefined || intensityFactor !== undefined) {
+      await this.workoutRepository.updatePowerMetrics(activityId, { tss, intensityFactor, ftpUsed });
+    }
+
+    // Step C: Update max powers
+    if (maxPowers !== undefined) {
+      await this.workoutRepository.updateMaxPowers(activityId, maxPowers);
+    }
+
+    // Step D: Update avg speed
+    if (avgSpeed !== undefined) {
+      await this.workoutRepository.updateAvgSpeed(activityId, avgSpeed);
+    }
+
+    // Step E: For remaining actual fields, use the general update with a comprehensive $set
+    // We'll use the raw-update approach via a new repository method: materializeUpdate
+    await this.workoutRepository.materializeUpdate(activityId, $set);
+
+    // 5. Replace metric observations (delete old, insert new)
+    await this.workoutRepository.deleteMetrics(activityId);
+    if (parsedWorkout.dataPoints.length > 0) {
+      await this.workoutRepository.insertMetrics(activityId, parsedWorkout.dataPoints);
+    }
+
+    // 6. Mark the SourceArtifact as materialized=true
+    if (this.sourceArtifactRepository) {
+      await this.sourceArtifactRepository.update(artifactId, { materialized: true });
+    }
+  }
+
+  /**
+   * PLAN-024: Clear materialized data from an Activity.
+   * Removes actual/derived fields and metric observations.
+   * Preserves planned values and metadata.
+   */
+  async clearActivityMaterialization(activityId: string, userId: string): Promise<void> {
+    const activity = await this.workoutRepository.findById(activityId);
+    if (!activity) {
+      throw new ValidationError(`Activity not found: ${activityId}`);
+    }
+
+    if (activity.userId !== userId) {
+      throw new ValidationError(`Activity not found: ${activityId}`);
+    }
+
+    // Determine new status
+    const hasPlannedValues = !!(activity.plannedDurationSeconds || activity.plannedTss);
+    const newStatus = hasPlannedValues ? 'planned' : 'completed';
+
+    // Clear actual/derived fields via materializeUpdate with null/$unset approach
+    const clearFields: Record<string, unknown> = {
+      status: newStatus,
+      startTime: null,
+      endTime: null,
+      durationSeconds: null,
+      movingTimeSeconds: null,
+      distanceMeters: null,
+      elevationGainMeters: null,
+      elevationLossMeters: null,
+      calories: null,
+      avgTemperatureCelsius: null,
+      maxTemperatureCelsius: null,
+      avgPowerWatts: null,
+      maxPowerWatts: null,
+      normalizedPowerWatts: null,
+      totalWorkKj: null,
+      ftpWatts: null,
+      ftpUsed: null,
+      intensityFactor: null,
+      tss: null,
+      aerobicDecoupling: null,
+      maxPowers: null,
+      avgHeartRateBpm: null,
+      maxHeartRateBpm: null,
+      avgCadenceRpm: null,
+      maxCadenceRpm: null,
+      totalPedalRevolutions: null,
+      avgSpeedMps: null,
+      maxSpeedMps: null,
+      aerobicTrainingEffect: null,
+      anaerobicTrainingEffect: null,
+      fileFormat: null,
+      dataSource: null,
+      sourceActivityId: null,
+      driveFileId: null,
+      driveWebViewLink: null,
+      updatedAt: new Date(),
+    };
+
+    await this.workoutRepository.clearMaterialization(activityId, clearFields);
+
+    // Remove metric observations
+    await this.workoutRepository.deleteMetrics(activityId);
+  }
+
   /** Extract file extension from filename (e.g., "ride.fit" → "fit") */
   private extractExtension(fileName: string): string {
     const lastDot = fileName.lastIndexOf('.');
@@ -424,6 +956,9 @@ export class UploadService implements IUploadService {
   ): Promise<WorkoutRecord> {
     const record: Omit<WorkoutRecord, 'id' | 'createdAt' | 'updatedAt'> = {
       userId,
+      status: 'completed',
+      template: false,
+      date: '', // Placeholder — set below after settings/timezone are available
       activityType: parsed.summary.activityType,
       subActivityType: parsed.summary.subActivityType,
       title: parsed.summary.title,
@@ -455,7 +990,8 @@ export class UploadService implements IUploadService {
     // Extract averages/peaks from data points if available
     const avgPower = this.computeAverage(parsed.dataPoints, 'powerWatts');
     const maxPower = this.computeMax(parsed.dataPoints, 'powerWatts');
-    const normalizedPower = parsed.summary.normalizedPowerWatts ?? this.computeNormalizedPower(parsed.dataPoints);
+    // PLAN-044: prefer stream-computed NP; fall back to device NP only when unavailable
+    const normalizedPower = this.selectNormalizedPower(parsed);
     this.logger.info('NP computation', {
       totalDataPoints: parsed.dataPoints.length,
       pointsWithPower: parsed.dataPoints.filter(dp => dp.powerWatts != null).length,
@@ -480,7 +1016,7 @@ export class UploadService implements IUploadService {
     const aerobicDecoupling = this.computeAerobicDecoupling(parsed.dataPoints);
     const avgHr = this.computeAverage(parsed.dataPoints, 'heartRateBpm');
     const maxHr = this.computeMax(parsed.dataPoints, 'heartRateBpm');
-    const avgCadence = this.computeAverage(parsed.dataPoints, 'cadenceRpm');
+    const avgCadence = this.computeAvgCadence(parsed.dataPoints);
     const avgSpeed = this.computeAvgSpeed(parsed.summary.distanceMeters, parsed.summary.movingTimeSeconds, parsed.summary.durationSeconds);
 
     // Compute max powers (power curve)
@@ -489,8 +1025,13 @@ export class UploadService implements IUploadService {
       .filter((v): v is number => v != null);
     const maxPowers = powerValues.length >= 5 ? computeMaxPowers(powerValues) : undefined;
 
+    // Derive Activity calendar date using user's timezone
+    const userTimezone = settings.timezone ?? 'America/Chicago';
+    const activityDate = parsed.summary.startTime.toLocaleDateString('en-CA', { timeZone: userTimezone });
+
     const fullRecord = {
       ...record,
+      date: activityDate,
       ...(avgPower !== undefined && { avgPowerWatts: avgPower }),
       ...(maxPower !== undefined && { maxPowerWatts: maxPower }),
       ...(normalizedPower !== undefined && { normalizedPowerWatts: normalizedPower }),
@@ -526,6 +1067,22 @@ export class UploadService implements IUploadService {
     const values = dataPoints
       .map((dp) => dp[field] as number | undefined)
       .filter((v): v is number => v !== undefined);
+
+    if (values.length === 0) return undefined;
+    return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+  }
+
+  /**
+   * Compute average cadence excluding zero-cadence samples (coasting/stopped).
+   * Industry convention: "average cadence" means average active pedaling cadence.
+   * Returns undefined if no non-zero cadence samples exist.
+   */
+  private computeAvgCadence(
+    dataPoints: ParsedWorkout['dataPoints'],
+  ): number | undefined {
+    const values = dataPoints
+      .map((dp) => dp.cadenceRpm)
+      .filter((v): v is number => v !== undefined && v > 0);
 
     if (values.length === 0) return undefined;
     return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
@@ -596,6 +1153,18 @@ export class UploadService implements IUploadService {
     const np = Math.pow(mean4th, 0.25);
 
     return Math.round(np);
+  }
+
+  /**
+   * PLAN-044: Select the authoritative Normalized Power for an actual workout.
+   * Prefers Watt Locker's own stream-computed NP whenever sufficient power data
+   * exists. Falls back to the device/session-reported NP only when the stream
+   * computation is unavailable (e.g., fewer than 30 power samples).
+   * Returns undefined when neither source can produce a value.
+   */
+  private selectNormalizedPower(parsed: ParsedWorkout): number | undefined {
+    const streamComputedNP = this.computeNormalizedPower(parsed.dataPoints);
+    return streamComputedNP ?? parsed.summary.normalizedPowerWatts;
   }
 
   /**

@@ -110,6 +110,22 @@ export class GpxFileParser implements WorkoutParser {
   }
 
   /**
+   * Light parse — extract only summary-level metadata from GPX without full processing.
+   */
+  async parseLightMetadata(buffer: Buffer): Promise<{ startTime?: Date; durationSeconds?: number; activityType?: string }> {
+    try {
+      const parsed = await this.parse(buffer);
+      return {
+        startTime: parsed.summary.startTime,
+        durationSeconds: parsed.summary.durationSeconds,
+        activityType: parsed.summary.activityType,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Normalize tracks to always be an array.
    */
   private normalizeTracks(trk: GpxTrack | GpxTrack[] | undefined): GpxTrack[] {
