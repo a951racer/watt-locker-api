@@ -1,4 +1,6 @@
 import { Db } from 'mongodb';
+import { MongoStepTemplateRepository } from '../repositories/stepTemplateRepository';
+import { MongoBlockTemplateRepository } from '../repositories/blockTemplateRepository';
 
 /**
  * Initialize MongoDB collections required by the application.
@@ -17,4 +19,10 @@ export async function initializeCollections(db: Db): Promise<void> {
       },
     });
   }
+
+  // PLAN-057: ensure the Step Template collection index exists (idempotent).
+  await new MongoStepTemplateRepository(db).createIndexes();
+
+  // PLAN-058: ensure the Block Template collection index exists (idempotent).
+  await new MongoBlockTemplateRepository(db).createIndexes();
 }

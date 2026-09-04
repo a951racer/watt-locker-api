@@ -23,6 +23,48 @@ export type MetricType =
 /** Activity lifecycle status */
 export type ActivityStatus = 'planned' | 'completed' | 'skipped';
 
+/**
+ * Per-step intensity metric for a planned Activity Step.
+ * Mirrors the UI `IntensityMetric` (watt-locker-ui/src/utils/tssCalculator.ts).
+ */
+export type StepIntensityMetric = 'power_ftp' | 'hr_threshold' | 'hr_max' | 'power_watts';
+
+/**
+ * PLAN-056: How a canonical Activity Step's duration is expressed.
+ * Exactly one of time/distance applies per step.
+ */
+export type StepDurationType = 'time' | 'distance';
+
+/**
+ * Canonical Activity Step ("segment") shape stored inside a workout's
+ * `segments` array.
+ *
+ * NOTE: The server persists `segments` verbatim (it is authored and consumed by
+ * the UI planner), so every field is optional here — this interface documents
+ * and lightly types the JSON rather than enforcing a strict schema. It mirrors
+ * the UI `PlanSegment` type. PLAN-056 added the optional `name`, the explicit
+ * `durationType`, and the distance-based `distanceMeters` fields; `durationSeconds`
+ * remains for time-based steps and legacy activities (which have no
+ * `durationType` and are treated as time-based).
+ */
+export interface PlanSegment {
+  name?: string;
+  type?: 'warmup' | 'interval' | 'recovery' | 'cooldown' | 'steady';
+  durationType?: StepDurationType;
+  durationSeconds?: number;
+  distanceMeters?: number;
+  intensityMetric?: StepIntensityMetric;
+  powerMin?: number;
+  powerMax?: number;
+  hrMin?: number;
+  hrMax?: number;
+  cadenceMin?: number;
+  cadenceMax?: number;
+  notes?: string;
+  repeatId?: string;
+  repeatCount?: number;
+}
+
 /** A single workout record stored in the database */
 export interface WorkoutRecord {
   id: string;
@@ -94,7 +136,7 @@ export interface WorkoutRecord {
   tags?: string[];
 
   // Planning-specific fields
-  segments?: unknown[];
+  segments?: PlanSegment[];
   targetSpeed?: number;
   targetPowerMin?: number;
   targetPowerMax?: number;
@@ -128,7 +170,7 @@ export interface ActivityUpdateFields {
   date?: string;
   plannedDurationSeconds?: number;
   plannedDistanceMeters?: number;
-  segments?: unknown[];
+  segments?: PlanSegment[];
   targetPowerMin?: number;
   targetPowerMax?: number;
   targetHrMin?: number;

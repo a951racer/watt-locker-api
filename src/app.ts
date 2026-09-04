@@ -17,6 +17,8 @@ import { createSettingsRouter } from './routes/settings';
 import { createWorkoutsRouter } from './routes/workouts';
 import { createGoogleAuthRouter } from './routes/googleAuth';
 import { createSourceArtifactsRouter } from './routes/sourceArtifacts';
+import { createStepTemplatesRouter } from './routes/stepTemplates';
+import { createBlockTemplatesRouter } from './routes/blockTemplates';
 
 // Services
 import { AuthService } from './services/authService';
@@ -24,12 +26,16 @@ import { SettingsService } from './services/settingsService';
 import { StravaSyncService } from './services/stravaSyncService';
 import { WorkoutService } from './services/workoutService';
 import { UploadService } from './services/uploadService';
+import { StepTemplateService } from './services/stepTemplateService';
+import { BlockTemplateService } from './services/blockTemplateService';
 
 // Repositories
 import { MongoUserRepository } from './repositories/userRepository';
 import { MongoSettingsRepository } from './repositories/settingsRepository';
 import { MongoWorkoutRepository } from './repositories/workoutRepository';
 import { MongoSourceArtifactRepository } from './repositories/sourceArtifactRepository';
+import { MongoStepTemplateRepository } from './repositories/stepTemplateRepository';
+import { MongoBlockTemplateRepository } from './repositories/blockTemplateRepository';
 
 // Parsers & Storage
 import { DefaultParserFactory } from './parsers/parserFactory';
@@ -59,6 +65,8 @@ export function createApp(deps: AppDependencies): Express {
   const settingsRepository = new MongoSettingsRepository(deps.db);
   const workoutRepository = new MongoWorkoutRepository(deps.db);
   const sourceArtifactRepository = new MongoSourceArtifactRepository(deps.db);
+  const stepTemplateRepository = new MongoStepTemplateRepository(deps.db);
+  const blockTemplateRepository = new MongoBlockTemplateRepository(deps.db);
 
   // --- Services ---
   const authService = new AuthService(userRepository);
@@ -83,6 +91,10 @@ export function createApp(deps: AppDependencies): Express {
   );
 
   const workoutService = new WorkoutService(workoutRepository, fileStorageAdapter);
+
+  const stepTemplateService = new StepTemplateService(stepTemplateRepository);
+
+  const blockTemplateService = new BlockTemplateService(blockTemplateRepository);
 
   const stravaSyncService = new StravaSyncService(
     settingsService,
@@ -125,6 +137,12 @@ export function createApp(deps: AppDependencies): Express {
 
   // Source artifact routes — JWT auth applied inside the router
   app.use('/api/source-artifacts', createSourceArtifactsRouter(sourceArtifactRepository, workoutRepository, authMiddleware, uploadService, fileStorageAdapter));
+
+  // Step Template routes (PLAN-057) — JWT auth applied inside the router
+  app.use('/api/templates/steps', createStepTemplatesRouter(stepTemplateService, authMiddleware));
+
+  // Block Template routes (PLAN-058) — JWT auth applied inside the router
+  app.use('/api/templates/blocks', createBlockTemplatesRouter(blockTemplateService, authMiddleware));
 
   // --- Error Handler (must be last) ---
   app.use(errorHandler);
